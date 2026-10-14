@@ -242,6 +242,21 @@ const endOfMonth = (month: string) => `${month}-${pad(daysInMonth(month))}`;
 /** Fine del mese successivo: orizzonte delle previsioni. */
 export const forecastHorizon = (day = today()) => endOfMonth(addMonths(monthOf(day), 1));
 
+export const DEFAULT_PAYDAY = 15;
+
+/** Prossimo giorno di stipendio dopo `day` (il giorno viene adattato ai mesi più corti). */
+export function nextPayday(payday: number, day = today()): string {
+  const at = (month: string) => `${month}-${pad(Math.min(payday, daysInMonth(month)))}`;
+  const thisMonth = at(monthOf(day));
+  return thisMonth > day ? thisMonth : at(addMonths(monthOf(day), 1));
+}
+
+/** Giorno prima di una data YYYY-MM-DD. */
+export const dayBefore = (date: string) => {
+  const [y, m, d] = date.split('-').map(Number);
+  return today(new Date(y, m - 1, d - 1));
+};
+
 /**
  * Elenca i movimenti attesi tra oggi (escluso) e `to` (incluso). Le voci mensili attive non
  * ancora registrate sono considerate dovute alla loro data, oppure oggi se già scadute.
@@ -471,4 +486,46 @@ export function toCsv(data: Pick<Data, 'transactions' | 'accounts'>): string {
       ].join(';'),
     );
   return ['Data;Tipo;Conto;Conto di arrivo;Categoria;Descrizione;Importo', ...rows].join('\n');
+}
+
+export interface Flow {
+  label: string;
+  amount: number;
+}
+
+/** Flussi di un mese per il diagramma di Sankey: entrate per categoria → spese per categoria + risparmio. */
+export interface MonthFlows {
+  incomes: Flow[];
+  expenses: Flow[];
+  /** Entrate non spese. */
+  saved: number;
+  /** Spese oltre le entrate, coperte con i soldi già presenti sui conti. */
+  fromSavings: number;
+  /** Totale che attraversa il diagramma (uguale a sinistra e a destra). */
+  total: number;
+}
+
+/** Raggruppa per categoria e unisce le più piccole in "altro" oltre `max` voci. */
+function groupFlows(txs: Transaction[], max: number, otherLabel: string): Flow[] {
+  const map = new Map<string, number>();
+  for (const t of txs) map.set(t.category, (map.get(t.category) ?? 0) + t.amount);
+  const sorted = [...map].map(([label, amount]) => ({ label, amount: round(amount) })).sort((a, b) => b.amount - a.amount);
+  if (sorted.length <= max) return sorted;
+  const rest = sorted.slice(max - 1);
+  return [...sorted.slice(0, max - 1), { label: otherLabel, amount: sum(rest) }];
+}
+
+export function monthFlows(data: Data, month: string, includeFuture = false, asOf = today()): MonthFlows {
+  const txs = transactionsIn(data.transactions, month).filter((t) => includeFuture || t.date <= asOf);
+  const incomes = groupFlows(txs.filter((t) => t.kind === 'entrata'), 6, 'Altre entrate');
+  const expenses = groupFlows(txs.filter((t) => t.kind === 'uscita'), 7, 'Altre spese');
+  const totalIn = sum(incomes);
+  const totalOut = sum(expenses);
+  return {
+    incomes,
+    expenses,
+    saved: round(Math.max(0, totalIn - totalOut)),
+    fromSavings: round(Math.max(0, totalOut - totalIn)),
+    total: round(Math.max(totalIn, totalOut)),
+  };
 }

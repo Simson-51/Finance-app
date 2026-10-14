@@ -1330,3 +1330,207 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Safari su iPhone dà ai campi data una larghezza minima e un'altezza propria:
+   li riallineo agli altri campi così non escono dalla colonna. */
+input[type='date'] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  height: 46px;
+  text-align: left;
+}
+
+input[type='date']::-webkit-date-and-time-value {
+  text-align: left;
+  margin: 0;
+}
+
+.row-2 > * {
+  min-width: 0;
+}
+
+select,
+input:not([type='checkbox']) {
+  height: 46px;
+}
+
+/* ---------- Sankey ---------- */
+
+:root {
+  --flow-in: #15803d;
+  --flow-out: #c2410c;
+  --flow-save: #2563eb;
+  --flow-mid: #94a3b8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --flow-in: #199e70;
+    --flow-out: #d95926;
+    --flow-save: #3987e5;
+    --flow-mid: #64748b;
+  }
+}
+
+:root[data-theme='dark'] {
+  --flow-in: #199e70;
+  --flow-out: #d95926;
+  --flow-save: #3987e5;
+  --flow-mid: #64748b;
+}
+
+.sankey-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sankey-card:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.sankey-card-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.sankey-card-icon path {
+  opacity: 0.85;
+}
+
+.chevron {
+  font-size: 1.6rem;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.tone-in {
+  fill: var(--flow-in);
+}
+
+.tone-out {
+  fill: var(--flow-out);
+}
+
+.tone-save {
+  fill: var(--flow-save);
+}
+
+.tone-mid {
+  fill: var(--flow-mid);
+}
+
+.sankey svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.sk-link {
+  opacity: 0.32;
+  transition: opacity 0.15s;
+  cursor: default;
+}
+
+.sk-links.has-hover .sk-link {
+  opacity: 0.12;
+}
+
+.sk-links.has-hover .sk-link.active {
+  opacity: 0.6;
+}
+
+.sk-name,
+.sk-value {
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.sk-name {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--text);
+}
+
+.sk-value {
+  font-size: 11.5px;
+  fill: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sk-legend {
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.dot.sk-in {
+  background: var(--flow-in);
+}
+
+.dot.sk-out {
+  background: var(--flow-out);
+}
+
+.dot.sk-save {
+  background: var(--flow-save);
+}
+
+.sk-table {
+  margin-top: 12px;
+  font-size: 0.9rem;
+}
+
+.sk-table summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sk-table table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.sk-table th,
+.sk-table td {
+  text-align: left;
+  padding: 6px 4px;
+  border-top: 1px solid var(--border);
+  font-weight: 400;
+}
+
+.sk-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.check.small {
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+}
+
+.modal.wide {
+  width: min(860px, calc(100vw - 32px));
+}
+
+@media (max-width: 600px) {
+  .modal.wide {
+    width: 100vw;
+  }
+}

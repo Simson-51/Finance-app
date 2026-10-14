@@ -183,7 +183,7 @@ function AccountForm({
   );
 }
 
-export function AccountsView({ store }: { store: Store }) {
+export function AccountsView({ store, payday }: { store: Store; payday: number }) {
   const [editing, setEditing] = useState<Account | 'new' | null>(null);
   const { accounts, transactions } = store.data;
   const now = today();
@@ -191,7 +191,7 @@ export function AccountsView({ store }: { store: Store }) {
   const archived = accounts.filter((a) => a.archived);
   const total = totalBalance(store.data, now);
   const canDelete = (a: Account) => accounts.length > 1 && !transactions.some((t) => t.accountId === a.id || t.toAccountId === a.id);
-  const fc = useForecast(store.data);
+  const fc = useForecast(store.data, payday);
   const month = monthOf(now);
   const monthEnd = forecast(store.data, now, `${month}-${String(daysInMonth(month)).padStart(2, '0')}`);
 

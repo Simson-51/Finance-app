@@ -1,11 +1,20 @@
 import { useMemo } from 'react';
-import { accountName, euro, forecast, forecastHorizon, formatDate, today, uid, type Forecast } from '../finance';
+import { accountName, dayBefore, euro, forecast, formatDate, nextPayday, today, uid, type Forecast } from '../finance';
 import type { Store } from '../store';
 import type { Data } from '../types';
 
-/** Previsione dei saldi fino a fine del mese prossimo, ricalcolata a ogni modifica. */
-export function useForecast(data: Data): Forecast {
-  return useMemo(() => forecast(data), [data]);
+export type PaydayForecast = Forecast & { payday: string };
+
+/**
+ * Previsione dei saldi fino al giorno prima del prossimo stipendio: è il periodo che i soldi
+ * di oggi devono coprire. Ricalcolata a ogni modifica.
+ */
+export function useForecast(data: Data, payday: number): PaydayForecast {
+  return useMemo(() => {
+    const day = today();
+    const next = nextPayday(payday, day);
+    return { ...forecast(data, day, dayBefore(next)), payday: next };
+  }, [data, payday]);
 }
 
 /** Triangolo giallo con punto esclamativo. */
@@ -24,7 +33,7 @@ export const shortfallText = (shortfall: number, date?: string) =>
   `Mancano ${euro(shortfall)} per i pagamenti previsti${date ? ` (dal ${formatDate(date)})` : ''}`;
 
 /** Avvisi su conti senza fondi sufficienti e ricariche da fare per mantenere il budget. */
-export function Alerts({ store, fc }: { store: Store; fc: Forecast }) {
+export function Alerts({ store, fc }: { store: Store; fc: PaydayForecast }) {
   const { accounts } = store.data;
   const short = accounts.filter((a) => fc.accounts[a.id]?.shortfall > 0);
   if (!short.length && !fc.topUps.length) return null;
@@ -39,7 +48,8 @@ export function Alerts({ store, fc }: { store: Store; fc: Forecast }) {
             <div>
               <strong>{a.name}: soldi insufficienti</strong>
               <p>
-                {shortfallText(f.shortfall, f.shortDate)}. Fino al {formatDate(forecastHorizon())} il saldo scenderebbe a {euro(f.min)}.
+                {shortfallText(f.shortfall, f.shortDate)}. Prima dello stipendio del {formatDate(fc.payday)} il saldo scenderebbe a{' '}
+                {euro(f.min)}.
               </p>
             </div>
           </div>
