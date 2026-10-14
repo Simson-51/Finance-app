@@ -2,6 +2,7 @@
 
 App web (installabile anche su telefono e computer come PWA) per gestire le finanze personali:
 
+- **Conti e carte**: conto corrente, carte, contanti e risparmi, ciascuno con il proprio saldo iniziale; saldo per conto e disponibilità totale; trasferimenti tra conti.
 - **Entrate e uscite**: registra i movimenti con importo, data, categoria e descrizione; filtra per tipo, categoria o testo.
 - **Spese mensili**: imposta le voci fisse (affitto, bollette, abbonamenti, stipendio…) e ogni mese segnale come pagate/incassate con un tocco; il movimento viene registrato in automatico.
 - **Acquisti in programma**: annota cosa vuoi comprare, il costo, la priorità e la data obiettivo; l'app calcola quanto mettere da parte ogni mese. Quando compri, l'uscita viene registrata.
@@ -9,7 +10,18 @@ App web (installabile anche su telefono e computer come PWA) per gestire le fina
 - **Backup**: esporta/importa i dati in JSON ed esporta i movimenti in CSV (apribile con Excel).
 - Tema chiaro/scuro, funziona offline.
 
-I dati sono salvati **solo nel browser del dispositivo** (localStorage): nessun server, nessun account. Usa *Impostazioni → Esporta backup* per conservarli o trasferirli su un altro dispositivo.
+I dati sono salvati nel browser del dispositivo (localStorage): non c'è un server dell'app né un account da creare.
+
+## Sincronizzazione tra dispositivi (facoltativa, cifrata)
+
+Da *Impostazioni → Sincronizzazione tra dispositivi* puoi usare gli stessi dati su telefono e computer:
+
+- i dati vengono **cifrati nel browser** (AES-GCM 256 bit, chiave derivata dalla tua password con PBKDF2-SHA256, 600.000 iterazioni) prima di lasciare il dispositivo;
+- il file cifrato viene salvato in un **Gist segreto del tuo account GitHub**: né GitHub né altri possono leggerne il contenuto senza la password;
+- su ogni dispositivo servono un token GitHub con il solo permesso *Gists: Read and write* e la stessa password;
+- le modifiche fatte su più dispositivi vengono unite (per ogni voce vince la modifica più recente, le eliminazioni si propagano).
+
+Token e password restano salvati solo nel browser di ciascun dispositivo. Se perdi la password i dati online non sono recuperabili, ma quelli sui dispositivi restano.
 
 ## Sviluppo
 

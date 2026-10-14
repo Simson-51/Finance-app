@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accountBalance,
   addMonths,
+  DEFAULT_ACCOUNT_ID,
   emptyData,
+  merge,
+  normalize,
+  sameData,
   monthSummary,
   monthsUntil,
   parseAmount,
@@ -12,13 +17,30 @@ import {
   toCsv,
   totalBalance,
 } from './finance';
-import type { Data, Planned, Recurring } from './types';
+import type { Account, Data, Planned, Recurring, Transaction } from './types';
 
-const rent: Recurring = { id: 'r1', kind: 'uscita', name: 'Affitto', amount: 700, category: 'Casa', day: 5, active: true };
-const salary: Recurring = { id: 'r2', kind: 'entrata', name: 'Stipendio', amount: 1800, category: 'Stipendio', day: 27, active: true };
-const netflix: Recurring = { id: 'r3', kind: 'uscita', name: 'Netflix', amount: 13.99, category: 'Abbonamenti', day: 31, active: false };
+const rent: Recurring = { id: 'r1', kind: 'uscita', name: 'Affitto', amount: 700, category: 'Casa', day: 5, active: true, updatedAt: 0 };
+const salary: Recurring = { id: 'r2', kind: 'entrata', name: 'Stipendio', amount: 1800, category: 'Stipendio', day: 27, active: true, updatedAt: 0 };
+const netflix: Recurring = { id: 'r3', kind: 'uscita', name: 'Netflix', amount: 13.99, category: 'Abbonamenti', day: 31, active: false, updatedAt: 0 };
 
-const plan = (p: Partial<Planned>): Planned => ({ id: 'p', name: 'x', cost: 100, saved: 0, priority: 'media', category: 'Altro', notes: '', ...p });
+const plan = (p: Partial<Planned>): Planned => ({ id: 'p', name: 'x', cost: 100, saved: 0, priority: 'media', category: 'Altro', notes: '', updatedAt: 0, ...p });
+
+const tx = (t: Partial<Transaction> & Pick<Transaction, 'id' | 'kind' | 'amount' | 'date'>): Transaction => ({
+  category: 'Altro',
+  description: '',
+  accountId: 'bank',
+  updatedAt: 0,
+  ...t,
+});
+
+const account = (a: Partial<Account> & Pick<Account, 'id'>): Account => ({
+  name: a.id,
+  type: 'conto',
+  initialBalance: 0,
+  archived: false,
+  updatedAt: 0,
+  ...a,
+});
 
 describe('date', () => {
   it('somma mesi attraversando gli anni', () => {
@@ -59,12 +81,14 @@ describe('monthSummary', () => {
   const data: Data = {
     ...emptyData(),
     recurring: [rent, salary, netflix],
+    accounts: [account({ id: 'bank', initialBalance: 1000 }), account({ id: 'card', type: 'carta', initialBalance: 50 })],
     transactions: [
-      { id: 't1', kind: 'entrata', amount: 1800, date: '2026-10-01', category: 'Stipendio', description: '', recurringId: 'r2' },
-      { id: 't2', kind: 'uscita', amount: 80.4, date: '2026-10-03', category: 'Spesa', description: '' },
-      { id: 't3', kind: 'uscita', amount: 19.6, date: '2026-10-09', category: 'Spesa', description: '' },
-      { id: 't4', kind: 'uscita', amount: 50, date: '2026-10-10', category: 'Svago', description: '' },
-      { id: 't5', kind: 'uscita', amount: 999, date: '2026-09-30', category: 'Svago', description: '' },
+      tx({ id: 't1', kind: 'entrata', amount: 1800, date: '2026-10-01', category: 'Stipendio', recurringId: 'r2' }),
+      tx({ id: 't2', kind: 'uscita', amount: 80.4, date: '2026-10-03', category: 'Spesa' }),
+      tx({ id: 't3', kind: 'uscita', amount: 19.6, date: '2026-10-09', category: 'Spesa', accountId: 'card' }),
+      tx({ id: 't4', kind: 'uscita', amount: 50, date: '2026-10-10', category: 'Svago' }),
+      tx({ id: 't5', kind: 'uscita', amount: 999, date: '2026-09-30', category: 'Svago' }),
+      tx({ id: 't6', kind: 'trasferimento', amount: 200, date: '2026-10-05', category: 'Trasferimento', accountId: 'bank', toAccountId: 'card' }),
     ],
   };
 
@@ -84,9 +108,23 @@ describe('monthSummary', () => {
     ]);
   });
 
-  it('calcola il saldo complessivo fino a una data', () => {
-    expect(totalBalance(data.transactions, '2026-09-30')).toBe(-999);
-    expect(totalBalance(data.transactions)).toBe(651);
+  it('esclude i trasferimenti da entrate, uscite e categorie', () => {
+    const s = monthSummary(data, '2026-10');
+    expect(s.byCategory.some((c) => c.category === 'Trasferimento')).toBe(false);
+  });
+
+  it('calcola i saldi dei conti partendo dal saldo iniziale', () => {
+    const [bank, card] = data.accounts;
+    // 1000 - 999 + 1800 - 80,40 - 50 - 200
+    expect(accountBalance(data, bank)).toBe(1470.6);
+    // 50 + 200 - 19,60
+    expect(accountBalance(data, card)).toBe(230.4);
+    expect(accountBalance(data, card, '2026-10-04')).toBe(50);
+  });
+
+  it('calcola il saldo complessivo fino a una data (i trasferimenti si compensano)', () => {
+    expect(totalBalance(data, '2026-09-30')).toBe(51);
+    expect(totalBalance(data)).toBe(1701);
   });
 });
 
@@ -115,15 +153,71 @@ describe('backup ed export', () => {
     expect(parseBackup(JSON.stringify(emptyData()))).toEqual(emptyData());
   });
 
-  it('esporta CSV con importi con segno e campi protetti', () => {
-    const csv = toCsv([
-      { id: '1', kind: 'uscita', amount: 10.5, date: '2026-10-02', category: 'Spesa', description: 'pane; latte' },
-      { id: '2', kind: 'entrata', amount: 100, date: '2026-10-01', category: 'Altro', description: '' },
-    ]);
+  it('migra i backup della prima versione creando il conto principale', () => {
+    const v1 = {
+      version: 1,
+      transactions: [{ id: 't', kind: 'uscita', amount: 5, date: '2026-10-01', category: 'Spesa', description: '' }],
+      recurring: [],
+      planned: [],
+    };
+    const data = parseBackup(JSON.stringify(v1));
+    expect(data.version).toBe(2);
+    expect(data.accounts.map((a) => a.id)).toEqual([DEFAULT_ACCOUNT_ID]);
+    expect(data.transactions[0]).toMatchObject({ accountId: DEFAULT_ACCOUNT_ID, updatedAt: 0 });
+    expect(data.deleted).toEqual({});
+  });
+
+  it('esporta CSV con importi con segno, conti e campi protetti', () => {
+    const csv = toCsv({
+      accounts: [account({ id: 'bank', name: 'Banca' }), account({ id: 'card', name: 'Carta' })],
+      transactions: [
+        tx({ id: '1', kind: 'uscita', amount: 10.5, date: '2026-10-02', category: 'Spesa', description: 'pane; latte' }),
+        tx({ id: '2', kind: 'entrata', amount: 100, date: '2026-10-01' }),
+        tx({ id: '3', kind: 'trasferimento', amount: 20, date: '2026-10-03', category: 'Trasferimento', toAccountId: 'card' }),
+      ],
+    });
     expect(csv.split('\n')).toEqual([
-      'Data;Tipo;Categoria;Descrizione;Importo',
-      '2026-10-01;entrata;Altro;;100,00',
-      '2026-10-02;uscita;Spesa;"pane; latte";-10,50',
+      'Data;Tipo;Conto;Conto di arrivo;Categoria;Descrizione;Importo',
+      '2026-10-01;entrata;Banca;;Altro;;100,00',
+      '2026-10-02;uscita;Banca;;Spesa;"pane; latte";-10,50',
+      '2026-10-03;trasferimento;Banca;Carta;Trasferimento;;20,00',
     ]);
+  });
+});
+
+describe('unione dei dati tra dispositivi', () => {
+  const base = (patch: Partial<Data>): Data => ({ ...normalize({}), ...patch });
+
+  it('tiene i record di entrambi e la versione modificata più di recente', () => {
+    const phone = base({
+      accounts: [account({ id: DEFAULT_ACCOUNT_ID, initialBalance: 500, updatedAt: 10 })],
+      transactions: [tx({ id: 'a', kind: 'uscita', amount: 5, date: '2026-10-01', updatedAt: 1 }), tx({ id: 'shared', kind: 'uscita', amount: 1, date: '2026-10-01', updatedAt: 5 })],
+    });
+    const pc = base({
+      transactions: [tx({ id: 'b', kind: 'entrata', amount: 9, date: '2026-10-02', updatedAt: 2 }), tx({ id: 'shared', kind: 'uscita', amount: 2, date: '2026-10-01', updatedAt: 7 })],
+    });
+    const merged = merge(phone, pc);
+    expect(merged.transactions.map((t) => t.id).sort()).toEqual(['a', 'b', 'shared']);
+    expect(merged.transactions.find((t) => t.id === 'shared')!.amount).toBe(2);
+    // il conto principale modificato sul telefono vince su quello mai toccato del computer
+    expect(merged.accounts).toHaveLength(1);
+    expect(merged.accounts[0].initialBalance).toBe(500);
+  });
+
+  it('propaga le eliminazioni, salvo modifiche successive', () => {
+    const a = base({ transactions: [tx({ id: 'x', kind: 'uscita', amount: 1, date: '2026-10-01', updatedAt: 1 }), tx({ id: 'y', kind: 'uscita', amount: 1, date: '2026-10-01', updatedAt: 9 })] });
+    const b = base({ transactions: [], deleted: { x: 5, y: 5 } });
+    const merged = merge(a, b);
+    expect(merged.transactions.map((t) => t.id)).toEqual(['y']);
+    expect(merged.deleted).toEqual({ x: 5, y: 5 });
+  });
+
+  it('è commutativa e idempotente', () => {
+    const a = base({ transactions: [tx({ id: 'x', kind: 'uscita', amount: 1, date: '2026-10-01', updatedAt: 3 })], deleted: { z: 4 } });
+    const b = base({ transactions: [tx({ id: 'x', kind: 'uscita', amount: 2, date: '2026-10-01', updatedAt: 3 }), tx({ id: 'z', kind: 'uscita', amount: 1, date: '2026-10-01', updatedAt: 1 })] });
+    const ab = merge(a, b);
+    expect(sameData(ab, merge(b, a))).toBe(true);
+    expect(sameData(merge(ab, b), ab)).toBe(true);
+    expect(ab.transactions.map((t) => t.id)).toEqual(['x']);
   });
 });

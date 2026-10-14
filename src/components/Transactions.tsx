@@ -1,91 +1,125 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { CATEGORIES, euro, formatDate, monthOf, parseAmount, sum, today, transactionsIn, uid } from '../finance';
+import { accountName, CATEGORIES, euro, formatDate, monthOf, parseAmount, sum, today, transactionsIn, uid, usableAccounts } from '../finance';
 import type { Store } from '../store';
-import type { Kind, Transaction } from '../types';
+import type { Account, Kind, Transaction, TxKind } from '../types';
+import { AccountSelect } from './Accounts';
 import { Empty, Field, Modal } from './ui';
 
+const KIND_LABEL: Record<TxKind, string> = { uscita: 'Uscita', entrata: 'Entrata', trasferimento: 'Trasferimento' };
+const TRANSFER_CATEGORY = 'Trasferimento';
+
 export function TransactionForm({
+  accounts,
   initial,
   defaultKind = 'uscita',
   defaultDate = today(),
+  defaultAccount,
   onSave,
   onDelete,
   onClose,
 }: {
+  accounts: Account[];
   initial?: Transaction;
   defaultKind?: Kind;
   defaultDate?: string;
-  onSave: (t: Transaction) => void;
+  defaultAccount?: string;
+  onSave: (t: Omit<Transaction, 'updatedAt'>) => void;
   onDelete?: (id: string) => void;
   onClose: () => void;
 }) {
-  const [kind, setKind] = useState<Kind>(initial?.kind ?? defaultKind);
+  const usable = usableAccounts(accounts, initial?.accountId);
+  const firstAccount = (usable.find((a) => a.id === defaultAccount) ?? usable[0]).id;
+  const [kind, setKind] = useState<TxKind>(initial?.kind ?? defaultKind);
   const [amount, setAmount] = useState(initial ? String(initial.amount).replace('.', ',') : '');
   const [date, setDate] = useState(initial?.date ?? defaultDate);
-  const [category, setCategory] = useState(initial?.category ?? CATEGORIES[kind][0]);
+  const [accountId, setAccountId] = useState(initial?.accountId ?? firstAccount);
+  const [toAccountId, setToAccountId] = useState(
+    initial?.toAccountId ?? usableAccounts(accounts).find((a) => a.id !== (initial?.accountId ?? firstAccount))?.id ?? '',
+  );
+  const [category, setCategory] = useState(initial?.kind === 'trasferimento' ? CATEGORIES.uscita[0] : (initial?.category ?? CATEGORIES.uscita[0]));
   const [description, setDescription] = useState(initial?.description ?? '');
   const [error, setError] = useState('');
 
-  const switchKind = (k: Kind) => {
+  const canTransfer = usableAccounts(accounts, initial?.toAccountId).length > 1;
+
+  const switchKind = (k: TxKind) => {
     setKind(k);
-    if (!CATEGORIES[k].includes(category)) setCategory(CATEGORIES[k][0]);
+    if (k !== 'trasferimento' && !CATEGORIES[k].includes(category)) setCategory(CATEGORIES[k][0]);
+  };
+
+  const changeFrom = (id: string) => {
+    setAccountId(id);
+    if (id === toAccountId) setToAccountId(usableAccounts(accounts).find((a) => a.id !== id)?.id ?? '');
   };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const value = parseAmount(amount);
-    if (!(value > 0)) return setError("Inserisci un importo maggiore di zero");
+    if (!(value > 0)) return setError('Inserisci un importo maggiore di zero');
     if (!date) return setError('Inserisci una data');
-    onSave({ ...initial, id: initial?.id ?? uid(), kind, amount: value, date, category, description: description.trim() });
+    const transfer = kind === 'trasferimento';
+    if (transfer && (!toAccountId || toAccountId === accountId)) return setError('Scegli due conti diversi');
+    onSave({
+      ...initial,
+      id: initial?.id ?? uid(),
+      kind,
+      amount: value,
+      date,
+      accountId,
+      toAccountId: transfer ? toAccountId : undefined,
+      category: transfer ? TRANSFER_CATEGORY : category,
+      description: description.trim(),
+    });
     onClose();
   };
 
-  const categories = CATEGORIES[kind].includes(category) ? CATEGORIES[kind] : [category, ...CATEGORIES[kind]];
+  const catKind: Kind = kind === 'entrata' ? 'entrata' : 'uscita';
+  const categories = CATEGORIES[catKind].includes(category) ? CATEGORIES[catKind] : [category, ...CATEGORIES[catKind]];
+  const kinds: TxKind[] = canTransfer || kind === 'trasferimento' ? ['uscita', 'entrata', 'trasferimento'] : ['uscita', 'entrata'];
 
   return (
     <Modal title={initial ? 'Modifica movimento' : 'Nuovo movimento'} onClose={onClose}>
       <form onSubmit={submit} className="form">
         <div className="segmented" role="radiogroup" aria-label="Tipo">
-          {(['uscita', 'entrata'] as Kind[]).map((k) => (
-            <button
-              key={k}
-              type="button"
-              role="radio"
-              aria-checked={kind === k}
-              className={kind === k ? `active ${k}` : ''}
-              onClick={() => switchKind(k)}
-            >
-              {k === 'uscita' ? 'Uscita' : 'Entrata'}
+          {kinds.map((k) => (
+            <button key={k} type="button" role="radio" aria-checked={kind === k} className={kind === k ? `active ${k}` : ''} onClick={() => switchKind(k)}>
+              {KIND_LABEL[k]}
             </button>
           ))}
         </div>
         <Field label="Importo (€)">
-          {(id) => (
-            <input
-              id={id}
-              inputMode="decimal"
-              autoFocus
-              placeholder="0,00"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
-          )}
+          {(id) => <input id={id} inputMode="decimal" autoFocus placeholder="0,00" value={amount} onChange={(e) => setAmount(e.target.value)} />}
         </Field>
+        {kind === 'trasferimento' ? (
+          <div className="row-2">
+            <AccountSelect accounts={accounts} value={accountId} onChange={changeFrom} label="Dal conto" />
+            <AccountSelect accounts={accounts} value={toAccountId} onChange={setToAccountId} label="Al conto" exclude={accountId} />
+          </div>
+        ) : (
+          <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} />
+        )}
         <div className="row-2">
           <Field label="Data">{(id) => <input id={id} type="date" value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
-          <Field label="Categoria">
-            {(id) => (
-              <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
-                {categories.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            )}
-          </Field>
+          {kind !== 'trasferimento' && (
+            <Field label="Categoria">
+              {(id) => (
+                <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
+                  {categories.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          )}
         </div>
         <Field label="Descrizione">
           {(id) => (
-            <input id={id} placeholder="Es. Spesa al supermercato" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <input
+              id={id}
+              placeholder={kind === 'trasferimento' ? 'Es. Ricarica carta' : 'Es. Spesa al supermercato'}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
           )}
         </Field>
         {error && <p className="error">{error}</p>}
@@ -117,13 +151,17 @@ export function TransactionForm({
   );
 }
 
-export function TransactionList({ txs, onEdit }: { txs: Transaction[]; onEdit: (t: Transaction) => void }) {
+const BADGE: Record<TxKind, string> = { entrata: '↓', uscita: '↑', trasferimento: '⇄' };
+const SIGN: Record<TxKind, string> = { entrata: '+', uscita: '−', trasferimento: '' };
+
+export function TransactionList({ txs, accounts, onEdit }: { txs: Transaction[]; accounts: Account[]; onEdit: (t: Transaction) => void }) {
   const groups = useMemo(() => {
-    const sorted = [...txs].sort((a, b) => b.date.localeCompare(a.date));
+    const sorted = [...txs].sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt - a.updatedAt);
     const map = new Map<string, Transaction[]>();
     for (const t of sorted) map.set(t.date, [...(map.get(t.date) ?? []), t]);
     return [...map];
   }, [txs]);
+  const multi = accounts.length > 1;
 
   return (
     <div className="tx-groups">
@@ -135,18 +173,20 @@ export function TransactionList({ txs, onEdit }: { txs: Transaction[]; onEdit: (
               <li key={t.id}>
                 <button className="list-item" onClick={() => onEdit(t)}>
                   <span className={`badge ${t.kind}`} aria-hidden>
-                    {t.kind === 'entrata' ? '↓' : '↑'}
+                    {BADGE[t.kind]}
                   </span>
                   <span className="list-main">
                     <span className="list-title">{t.description || t.category}</span>
                     <span className="list-sub">
-                      {t.category}
-                      {t.recurringId && ' · mensile'}
-                      {t.plannedId && ' · acquisto programmato'}
+                      {t.kind === 'trasferimento'
+                        ? `${accountName(accounts, t.accountId)} → ${accountName(accounts, t.toAccountId)}`
+                        : [t.category, multi && accountName(accounts, t.accountId), t.recurringId && 'mensile', t.plannedId && 'acquisto programmato']
+                            .filter(Boolean)
+                            .join(' · ')}
                     </span>
                   </span>
                   <span className={`amount ${t.kind}`}>
-                    {t.kind === 'entrata' ? '+' : '−'}
+                    {SIGN[t.kind]}
                     {euro(t.amount)}
                   </span>
                 </button>
@@ -159,25 +199,30 @@ export function TransactionList({ txs, onEdit }: { txs: Transaction[]; onEdit: (
   );
 }
 
-type Filter = 'tutti' | Kind;
+type Filter = 'tutti' | TxKind;
 
 export function TransactionsView({ store, month }: { store: Store; month: string }) {
   const [filter, setFilter] = useState<Filter>('tutti');
   const [category, setCategory] = useState('');
+  const [account, setAccount] = useState('');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Transaction | 'new' | null>(null);
+  const { accounts } = store.data;
 
   const monthTxs = transactionsIn(store.data.transactions, month);
-  const categories = [...new Set(monthTxs.map((t) => t.category))].sort();
+  const categories = [...new Set(monthTxs.filter((t) => t.kind !== 'trasferimento').map((t) => t.category))].sort();
   const q = query.trim().toLowerCase();
   const visible = monthTxs.filter(
     (t) =>
       (filter === 'tutti' || t.kind === filter) &&
       (!category || t.category === category) &&
+      (!account || t.accountId === account || t.toAccountId === account) &&
       (!q || t.description.toLowerCase().includes(q) || t.category.toLowerCase().includes(q)),
   );
   const income = sum(visible.filter((t) => t.kind === 'entrata'));
   const expenses = sum(visible.filter((t) => t.kind === 'uscita'));
+  const hasTransfers = accounts.length > 1 || monthTxs.some((t) => t.kind === 'trasferimento');
+  const filters: Filter[] = hasTransfers ? ['tutti', 'entrata', 'uscita', 'trasferimento'] : ['tutti', 'entrata', 'uscita'];
 
   // Nuovi movimenti: data di oggi se si sta guardando il mese corrente, altrimenti il primo del mese.
   const defaultDate = monthOf(today()) === month ? today() : `${month}-01`;
@@ -193,12 +238,22 @@ export function TransactionsView({ store, month }: { store: Store; month: string
 
       <div className="filters">
         <div className="segmented small" role="radiogroup" aria-label="Filtro tipo">
-          {(['tutti', 'entrata', 'uscita'] as Filter[]).map((f) => (
+          {filters.map((f) => (
             <button key={f} type="button" role="radio" aria-checked={filter === f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
-              {f === 'tutti' ? 'Tutti' : f === 'entrata' ? 'Entrate' : 'Uscite'}
+              {f === 'tutti' ? 'Tutti' : f === 'entrata' ? 'Entrate' : f === 'uscita' ? 'Uscite' : 'Trasf.'}
             </button>
           ))}
         </div>
+        {accounts.length > 1 && (
+          <select aria-label="Conto" value={account} onChange={(e) => setAccount(e.target.value)}>
+            <option value="">Tutti i conti</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        )}
         <select aria-label="Categoria" value={category} onChange={(e) => setCategory(e.target.value)}>
           <option value="">Tutte le categorie</option>
           {categories.map((c) => (
@@ -227,14 +282,16 @@ export function TransactionsView({ store, month }: { store: Store; month: string
           {!monthTxs.length && 'Aggiungi la tua prima entrata o uscita con il pulsante “Aggiungi”.'}
         </Empty>
       ) : (
-        <TransactionList txs={visible} onEdit={setEditing} />
+        <TransactionList txs={visible} accounts={accounts} onEdit={setEditing} />
       )}
 
       {editing && (
         <TransactionForm
+          accounts={accounts}
           initial={editing === 'new' ? undefined : editing}
           defaultKind={filter === 'entrata' ? 'entrata' : 'uscita'}
           defaultDate={defaultDate}
+          defaultAccount={account || undefined}
           onSave={store.saveTransaction}
           onDelete={store.deleteTransaction}
           onClose={() => setEditing(null)}
