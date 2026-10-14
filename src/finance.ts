@@ -110,27 +110,30 @@ export const recurringPayment = (txs: Transaction[], r: Recurring, month: string
   txs.find((t) => t.recurringId === r.id && monthOf(t.date) === month);
 
 export interface MonthSummary {
+  /** Entrate e uscite già avvenute (data fino a oggi). */
   income: number;
   expenses: number;
   balance: number;
-  /** Voci mensili attive non ancora registrate in questo mese. */
+  /** Movimenti con data futura e voci mensili attive non ancora registrate in questo mese. */
   pendingIncome: number;
   pendingExpenses: number;
-  /** Saldo del mese una volta registrate tutte le voci mensili rimaste. */
+  /** Saldo del mese una volta avvenuti tutti i movimenti previsti. */
   forecast: number;
   fixedExpenses: number;
   fixedIncome: number;
   byCategory: { category: string; amount: number }[];
 }
 
-export function monthSummary(data: Data, month: string): MonthSummary {
-  const txs = transactionsIn(data.transactions, month);
+export function monthSummary(data: Data, month: string, asOf = today()): MonthSummary {
+  const all = transactionsIn(data.transactions, month);
+  const txs = all.filter((t) => t.date <= asOf);
+  const future = all.filter((t) => t.date > asOf);
   const income = sum(txs.filter((t) => t.kind === 'entrata'));
   const expenses = sum(txs.filter((t) => t.kind === 'uscita'));
   const active = data.recurring.filter((r) => r.active);
   const pending = active.filter((r) => !recurringPayment(data.transactions, r, month));
-  const pendingIncome = sum(pending.filter((r) => r.kind === 'entrata'));
-  const pendingExpenses = sum(pending.filter((r) => r.kind === 'uscita'));
+  const pendingIncome = round(sum(pending.filter((r) => r.kind === 'entrata')) + sum(future.filter((t) => t.kind === 'entrata')));
+  const pendingExpenses = round(sum(pending.filter((r) => r.kind === 'uscita')) + sum(future.filter((t) => t.kind === 'uscita')));
 
   const cats = new Map<string, number>();
   for (const t of txs) if (t.kind === 'uscita') cats.set(t.category, (cats.get(t.category) ?? 0) + t.amount);
@@ -173,6 +176,162 @@ export const usableAccounts = (accounts: Account[], keep?: string) =>
   accounts.filter((a) => !a.archived || a.id === keep);
 
 export const accountName = (accounts: Account[], id?: string) => accounts.find((a) => a.id === id)?.name ?? 'Conto eliminato';
+
+/** Un movimento è "previsto" finché la sua data non è arrivata. */
+export const isFuture = (t: Transaction, day = today()) => t.date > day;
+
+/** Le ricariche automatiche azzerate (il saldo era già sufficiente) non vanno mostrate. */
+export const isVisible = (t: Transaction) => !(t.autoTopUp && t.amount === 0);
+
+/** Conto da cui ricaricare un conto con budget minimo, se la configurazione è valida. */
+export function topUpSource(accounts: Account[], a: Account): Account | undefined {
+  if (!a.minBalance || a.minBalance <= 0 || !a.topUpFrom || a.topUpFrom === a.id || a.archived) return undefined;
+  return accounts.find((x) => x.id === a.topUpFrom && !x.archived);
+}
+
+/** Id fisso della ricarica automatica di un giorno: due dispositivi producono lo stesso record. */
+export const topUpId = (accountId: string, date: string) => `topup-${accountId}-${date}`;
+
+/**
+ * Registra (o aggiorna) la ricarica automatica di oggi per ogni conto con budget minimo,
+ * così che il saldo torni esattamente al budget. Se la ricarica non serve più viene
+ * azzerata; se l'utente l'ha eliminata a mano non viene ricreata. Restituisce lo stesso
+ * oggetto se non c'è nulla da cambiare.
+ */
+export function reconcileTopUps(data: Data, day = today(), now = Date.now()): Data {
+  let transactions = data.transactions;
+  for (const a of data.accounts) {
+    const src = topUpSource(data.accounts, a);
+    if (!src || !a.autoTopUp) continue;
+    const id = topUpId(a.id, day);
+    if (data.deleted[id]) continue;
+    const existing = transactions.find((t) => t.id === id);
+    const balance = accountBalance({ transactions }, a, day) - (existing ? effectOn(existing, a.id) : 0);
+    const amount = Math.max(0, round(a.minBalance! - balance));
+    if (!existing && amount === 0) continue;
+    if (existing && existing.amount === amount && existing.accountId === src.id) continue;
+    const tx: Transaction = {
+      id,
+      kind: 'trasferimento',
+      amount,
+      date: day,
+      category: 'Trasferimento',
+      description: `Ricarica automatica ${a.name}`,
+      accountId: src.id,
+      toAccountId: a.id,
+      autoTopUp: true,
+      updatedAt: now,
+    };
+    transactions = existing ? transactions.map((t) => (t.id === id ? tx : t)) : [...transactions, tx];
+  }
+  return transactions === data.transactions ? data : { ...data, transactions };
+}
+
+/** Pagamento o incasso atteso nel futuro (movimento con data futura o voce mensile da registrare). */
+export interface ScheduledEvent {
+  date: string;
+  kind: Transaction['kind'];
+  amount: number;
+  accountId: string;
+  toAccountId?: string;
+  label: string;
+}
+
+const endOfMonth = (month: string) => `${month}-${pad(daysInMonth(month))}`;
+
+/** Fine del mese successivo: orizzonte delle previsioni. */
+export const forecastHorizon = (day = today()) => endOfMonth(addMonths(monthOf(day), 1));
+
+/**
+ * Elenca i movimenti attesi tra oggi (escluso) e `to` (incluso). Le voci mensili attive non
+ * ancora registrate sono considerate dovute alla loro data, oppure oggi se già scadute.
+ */
+export function scheduledEvents(data: Data, from = today(), to = forecastHorizon(from)): ScheduledEvent[] {
+  const events: ScheduledEvent[] = data.transactions
+    .filter((t) => t.date > from && t.date <= to && t.amount > 0)
+    .map((t) => ({ date: t.date, kind: t.kind, amount: t.amount, accountId: t.accountId, toAccountId: t.toAccountId, label: t.description || t.category }));
+
+  const fallback = data.accounts.find((a) => !a.archived) ?? data.accounts[0];
+  for (let month = monthOf(from); month <= monthOf(to); month = addMonths(month, 1)) {
+    for (const r of data.recurring) {
+      if (!r.active || recurringPayment(data.transactions, r, month)) continue;
+      const due = recurringDate(r, month);
+      if (due > to) continue;
+      const account = data.accounts.find((a) => a.id === r.accountId && !a.archived) ?? fallback;
+      events.push({ date: due < from ? from : due, kind: r.kind, amount: r.amount, accountId: account.id, label: r.name });
+    }
+  }
+  return events.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export interface AccountForecast {
+  /** Saldo oggi. */
+  current: number;
+  /** Saldo a fine orizzonte. */
+  end: number;
+  /** Saldo più basso raggiunto nel periodo. */
+  min: number;
+  /** Quanto manca per coprire i pagamenti previsti (0 se tutto è coperto). */
+  shortfall: number;
+  /** Primo giorno in cui i soldi non bastano. */
+  shortDate?: string;
+}
+
+export interface Forecast {
+  accounts: Record<string, AccountForecast>;
+  /** Ricariche da fare oggi per i conti con budget minimo in modalità manuale. */
+  topUps: { accountId: string; fromId: string; amount: number }[];
+}
+
+/**
+ * Simula giorno per giorno i saldi dei conti da oggi a `to`, applicando i movimenti previsti,
+ * le voci mensili da pagare e le ricariche dei conti con budget minimo.
+ */
+export function forecast(data: Data, from = today(), to = forecastHorizon(from)): Forecast {
+  const bal: Record<string, number> = {};
+  const result: Record<string, AccountForecast> = {};
+  for (const a of data.accounts) {
+    bal[a.id] = accountBalance(data, a, from);
+    result[a.id] = { current: bal[a.id], end: bal[a.id], min: bal[a.id], shortfall: 0 };
+  }
+  const topUps: Forecast['topUps'] = [];
+  const events = scheduledEvents(data, from, to);
+  const days = [...new Set([from, ...events.map((e) => e.date)])].sort();
+
+  for (const day of days) {
+    for (const e of events) {
+      if (e.date !== day) continue;
+      if (e.kind === 'trasferimento') {
+        if (e.accountId in bal) bal[e.accountId] -= e.amount;
+        if (e.toAccountId && e.toAccountId in bal) bal[e.toAccountId] += e.amount;
+      } else if (e.accountId in bal) {
+        bal[e.accountId] += e.kind === 'entrata' ? e.amount : -e.amount;
+      }
+    }
+    for (const a of data.accounts) {
+      const src = topUpSource(data.accounts, a);
+      const deficit = src ? round(a.minBalance! - bal[a.id]) : 0;
+      if (!src || deficit <= 0) continue;
+      bal[a.id] += deficit;
+      bal[src.id] -= deficit;
+      if (day === from && !a.autoTopUp) topUps.push({ accountId: a.id, fromId: src.id, amount: deficit });
+    }
+    for (const a of data.accounts) {
+      const f = result[a.id];
+      const b = round(bal[a.id]);
+      if (b < f.min) f.min = b;
+      // un conto nato in negativo (es. carta di credito) segnala solo il peggioramento rispetto a oggi
+      const floor = a.initialBalance < 0 ? Math.min(0, f.current) : 0;
+      const missing = round(floor - b);
+      if (missing > f.shortfall) {
+        if (!f.shortDate) f.shortDate = day;
+        f.shortfall = missing;
+      }
+    }
+  }
+  for (const a of data.accounts) result[a.id].end = round(bal[a.id]);
+  return { accounts: result, topUps };
+}
 
 export interface PlannedProgress {
   remaining: number;
@@ -297,7 +456,8 @@ export function sameData(a: Data, b: Data): boolean {
 
 export function toCsv(data: Pick<Data, 'transactions' | 'accounts'>): string {
   const esc = (v: string) => (/[";\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-  const rows = [...data.transactions]
+  const rows = data.transactions
+    .filter(isVisible)
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((t) =>
       [

@@ -23,6 +23,15 @@ export interface Account extends Synced {
   initialBalance: number;
   /** I conti archiviati non compaiono nei moduli ma restano nello storico. */
   archived: boolean;
+  /**
+   * Budget minimo (es. Satispay): quando il saldo scende sotto questa cifra il conto
+   * viene ricaricato da `topUpFrom` fino a tornare al budget.
+   */
+  minBalance?: number;
+  /** Conto da cui prelevare le ricariche. */
+  topUpFrom?: string;
+  /** true: l'app registra da sola la ricarica; false: la propone con un tasto. */
+  autoTopUp?: boolean;
 }
 
 /** Un movimento reale: soldi entrati, usciti o spostati tra conti in una certa data. */
@@ -41,6 +50,8 @@ export interface Transaction extends Synced {
   recurringId?: string;
   /** Presente se il movimento registra un acquisto in programma completato. */
   plannedId?: string;
+  /** Ricarica registrata automaticamente per mantenere il budget minimo di un conto. */
+  autoTopUp?: boolean;
 }
 
 /** Voce che si ripete ogni mese (affitto, bollette, abbonamenti, stipendio...). */

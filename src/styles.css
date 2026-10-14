@@ -1191,3 +1191,142 @@ code {
     display: none;
   }
 }
+
+/* ---------- Previsioni e avvisi ---------- */
+
+.with-icon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.warn-icon {
+  flex: none;
+}
+
+.tag {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: none;
+}
+
+.list-item.future .badge,
+.list-item.future .amount {
+  opacity: 0.75;
+}
+
+.list-item.future .amount {
+  font-style: italic;
+}
+
+.amount-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.planned-strip {
+  flex-basis: 100%;
+}
+
+.note {
+  margin: 0;
+  font-size: 0.88rem;
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.budget {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.alert > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.alert p {
+  margin: 2px 0 0;
+  font-size: 0.9rem;
+}
+
+.alert .warn-icon {
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+}
+
+.alert.warn {
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+}
+
+.alert.info {
+  align-items: center;
+}
+
+.alert-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  flex: none;
+}
+
+:root {
+  --warn-soft: #fefce8;
+  --warn-border: #fde047;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --warn-soft: #3a2f05;
+    --warn-border: #a16207;
+  }
+}
+
+:root[data-theme='dark'] {
+  --warn-soft: #3a2f05;
+  --warn-border: #a16207;
+}
+
+.truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

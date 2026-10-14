@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { emptyData, ensureAccount, merge, normalize, recurringDate, recurringPayment, sameData, today, uid } from './finance';
+import { emptyData, ensureAccount, merge, normalize, reconcileTopUps, recurringDate, recurringPayment, sameData, today, uid } from './finance';
 import type { Account, Collection, Data, Planned, Recurring, Transaction } from './types';
 
 const KEY = 'finanze:data';
@@ -51,6 +51,18 @@ export function useStore() {
       // spazio esaurito o storage bloccato: i dati restano in memoria finché la pagina è aperta
     }
   }, [data]);
+
+  // Registra le ricariche automatiche dei conti con budget minimo: dopo ogni modifica e
+  // quando l'app torna in primo piano (potrebbe essere cambiato il giorno).
+  const [day, setDay] = useState(today);
+  useEffect(() => {
+    const onVisible = () => document.visibilityState === 'visible' && setDay(today());
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+  useEffect(() => {
+    setData((cur) => reconcileTopUps(cur, day));
+  }, [data, day]);
 
   // Mantiene sincronizzate più schede aperte contemporaneamente.
   useEffect(() => {

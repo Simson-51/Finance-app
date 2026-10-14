@@ -1,9 +1,11 @@
-// Service worker: rende l'app utilizzabile offline.
-// Pagine: prima la rete, poi la cache. Risorse statiche: prima la cache, poi la rete.
-const CACHE = 'finanze-v1';
+// Service worker: rende l'app utilizzabile offline e sempre aggiornata.
+// Pagine: prima la rete (scavalcando la cache HTTP), poi la cache. Risorse statiche: prima la cache, poi la rete.
+const CACHE = 'finanze-v2';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icon.svg'])));
+  event.waitUntil(
+    caches.open(CACHE).then((c) => c.addAll(['./', './manifest.webmanifest', './icon.svg'].map((u) => new Request(u, { cache: 'reload' })))),
+  );
   self.skipWaiting();
 });
 
@@ -19,14 +21,17 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
 
   if (req.mode === 'navigate') {
+    // 'no-cache' obbliga a chiedere al server la versione più recente della pagina
     event.respondWith(
-      fetch(req)
+      fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('./index.html', copy));
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put('./', copy));
+          }
           return res;
         })
-        .catch(() => caches.match('./index.html')),
+        .catch(() => caches.match('./')),
     );
     return;
   }
