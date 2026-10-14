@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { addMonths, formatMonth, monthOf, today } from './finance';
+import { addMonths, DEFAULT_PAYDAY, formatMonth, monthOf, today } from './finance';
 import { useStore } from './store';
 import { useSync } from './useSync';
 import { Dashboard } from './components/Dashboard';
@@ -46,6 +46,11 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(() => readPref('finanze:tab', 'home', TABS.map((t) => t.id)));
   const [month, setMonth] = useState(monthOf(today()));
   const [theme, setTheme] = useState<Theme>(() => readPref('finanze:theme', 'auto', ['auto', 'light', 'dark'] as const));
+  const [payday, setPayday] = useState(() => {
+    const days = Array.from({ length: 31 }, (_, i) => String(i + 1));
+    return Number(readPref('finanze:payday', String(DEFAULT_PAYDAY), days));
+  });
+  useEffect(() => writePref('finanze:payday', String(payday)), [payday]);
 
   useEffect(() => writePref('finanze:tab', tab), [tab]);
   useEffect(() => {
@@ -120,12 +125,12 @@ export default function App() {
       )}
 
       <main>
-        {tab === 'home' && <Dashboard store={store} month={month} goTo={setTab} />}
+        {tab === 'home' && <Dashboard store={store} month={month} payday={payday} goTo={setTab} />}
         {tab === 'movimenti' && <TransactionsView store={store} month={month} />}
-        {tab === 'conti' && <AccountsView store={store} />}
+        {tab === 'conti' && <AccountsView store={store} payday={payday} />}
         {tab === 'mensili' && <RecurringView store={store} month={month} />}
         {tab === 'acquisti' && <PlannedView store={store} />}
-        {tab === 'impostazioni' && <SettingsView store={store} sync={sync} theme={theme} setTheme={setTheme} />}
+        {tab === 'impostazioni' && <SettingsView store={store} sync={sync} theme={theme} setTheme={setTheme} payday={payday} setPayday={setPayday} />}
       </main>
 
       <nav className="bottom-nav mobile-only" aria-label="Sezioni">

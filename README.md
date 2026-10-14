@@ -6,7 +6,8 @@ App web (installabile anche su telefono e computer come PWA) per gestire le fina
 - **Budget minimo**: per un conto come Satispay imposti la cifra da mantenere (es. 75 €) e il conto da cui ricaricarlo; la ricarica viene registrata in automatico o proposta con un tasto.
 - **Entrate e uscite**: registra i movimenti con importo, data, categoria e descrizione; filtra per tipo, categoria o testo.
 - **Movimenti previsti**: entrate, uscite e trasferimenti con data futura (es. il welfare aziendale in arrivo) non cambiano il saldo di oggi ma contano nelle previsioni, e diventano effettivi da soli alla data indicata.
-- **Avviso soldi insufficienti** ⚠️: l'app simula i saldi fino alla fine del mese successivo (movimenti previsti, voci mensili da pagare, ricariche) e segnala con un triangolo giallo i conti che non coprirebbero i pagamenti; l'avviso sparisce quando i soldi bastano.
+- **Avviso soldi insufficienti** ⚠️: l'app simula i saldi fino al giorno prima del prossimo stipendio (giorno impostabile, predefinito il 15) considerando movimenti previsti, voci mensili da pagare e ricariche, e segnala con un triangolo giallo i conti che non coprirebbero i pagamenti; l'avviso sparisce quando i soldi bastano.
+- **Flusso dei soldi**: dal riepilogo si apre un diagramma di Sankey del mese (entrate per categoria → spese per categoria e risparmio), con vista a tabella.
 - **Spese mensili**: imposta le voci fisse (affitto, bollette, abbonamenti, stipendio…) e ogni mese segnale come pagate/incassate con un tocco; il movimento viene registrato in automatico.
 - **Acquisti in programma**: annota cosa vuoi comprare, il costo, la priorità e la data obiettivo; l'app calcola quanto mettere da parte ogni mese. Quando compri, l'uscita viene registrata.
 - **Riepilogo mensile**: entrate, uscite, saldo, previsione di fine mese (con le voci fisse ancora da registrare), spese per categoria e andamento degli ultimi 6 mesi.

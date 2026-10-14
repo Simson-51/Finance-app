@@ -139,7 +139,21 @@ function SyncSection({ sync }: { sync: Sync }) {
   );
 }
 
-export function SettingsView({ store, sync, theme, setTheme }: { store: Store; sync: Sync; theme: Theme; setTheme: (t: Theme) => void }) {
+export function SettingsView({
+  store,
+  sync,
+  theme,
+  setTheme,
+  payday,
+  setPayday,
+}: {
+  store: Store;
+  sync: Sync;
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+  payday: number;
+  setPayday: (d: number) => void;
+}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const { accounts, transactions, recurring, planned } = store.data;
@@ -167,6 +181,21 @@ export function SettingsView({ store, sync, theme, setTheme }: { store: Store; s
       </div>
 
       <SyncSection sync={sync} />
+
+      <section className="card settings">
+        <h3>Stipendio</h3>
+        <Field label="Giorno del mese in cui arriva lo stipendio" hint="Gli avvisi ⚠️ controllano che i soldi bastino per i pagamenti previsti fino al giorno prima dello stipendio.">
+          {(id) => (
+            <select id={id} value={payday} onChange={(e) => setPayday(Number(e.target.value))}>
+              {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                <option key={d} value={d}>
+                  {d === 31 ? '31 (ultimo giorno del mese)' : d}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      </section>
 
       <section className="card settings">
         <h3>Aspetto</h3>

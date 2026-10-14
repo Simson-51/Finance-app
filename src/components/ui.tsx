@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -11,7 +11,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   return (
     <dialog
       ref={ref}
-      className="modal"
+      className={wide ? 'modal wide' : 'modal'}
       onClose={onClose}
       onCancel={(e) => {
         e.preventDefault();

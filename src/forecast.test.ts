@@ -154,3 +154,68 @@ describe('budget minimo e ricariche', () => {
     expect(fc.accounts.hype.shortDate).toBe('2026-10-22');
   });
 });
+
+describe('giorno dello stipendio', () => {
+  it('trova il prossimo stipendio e lo adatta ai mesi corti', async () => {
+    const { nextPayday, dayBefore } = await import('./finance');
+    expect(nextPayday(15, '2026-10-14')).toBe('2026-10-15');
+    expect(nextPayday(15, '2026-10-15')).toBe('2026-11-15');
+    expect(nextPayday(31, '2026-02-10')).toBe('2026-02-28');
+    expect(nextPayday(15, '2026-12-20')).toBe('2027-01-15');
+    expect(dayBefore('2026-11-01')).toBe('2026-10-31');
+    expect(dayBefore('2027-01-01')).toBe('2026-12-31');
+  });
+
+  it('gli avvisi guardano solo i pagamenti prima dello stipendio', () => {
+    const d = data({
+      accounts: [account({ id: 'bank', initialBalance: 100 })],
+      transactions: [
+        tx({ id: 'a', kind: 'uscita', amount: 80, date: '2026-10-20', accountId: 'bank' }),
+        tx({ id: 'b', kind: 'uscita', amount: 80, date: '2026-11-16', accountId: 'bank' }),
+      ],
+    });
+    // fino al 14/11 (stipendio il 15): basta
+    expect(forecast(d, '2026-10-16', '2026-11-14').accounts.bank.shortfall).toBe(0);
+    // con l'orizzonte lungo si vedrebbe anche la spesa del 16/11
+    expect(forecast(d, '2026-10-16').accounts.bank.shortfall).toBe(60);
+  });
+});
+
+describe('flussi del mese (Sankey)', () => {
+  it('bilancia entrate e uscite con risparmio o prelievo dai risparmi', async () => {
+    const { monthFlows } = await import('./finance');
+    const d = data({
+      transactions: [
+        tx({ id: '1', kind: 'entrata', amount: 1500, date: '2026-10-01', accountId: 'x', category: 'Stipendio' }),
+        tx({ id: '2', kind: 'uscita', amount: 700, date: '2026-10-02', accountId: 'x', category: 'Casa' }),
+        tx({ id: '3', kind: 'uscita', amount: 100, date: '2026-10-03', accountId: 'x', category: 'Spesa' }),
+        tx({ id: '4', kind: 'trasferimento', amount: 50, date: '2026-10-03', accountId: 'x', toAccountId: 'y' }),
+        tx({ id: '5', kind: 'uscita', amount: 900, date: '2026-10-20', accountId: 'x', category: 'Viaggi' }),
+      ],
+    });
+    const now = monthFlows(d, '2026-10', false, TODAY);
+    expect(now).toEqual({
+      incomes: [{ label: 'Stipendio', amount: 1500 }],
+      expenses: [
+        { label: 'Casa', amount: 700 },
+        { label: 'Spesa', amount: 100 },
+      ],
+      saved: 700,
+      fromSavings: 0,
+      total: 1500,
+    });
+    const withFuture = monthFlows(d, '2026-10', true, TODAY);
+    expect(withFuture.saved).toBe(0);
+    expect(withFuture.fromSavings).toBe(200);
+    expect(withFuture.total).toBe(1700);
+  });
+
+  it('raggruppa le categorie più piccole', async () => {
+    const { monthFlows } = await import('./finance');
+    const cats = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+    const d = data({ transactions: cats.map((c, i) => tx({ id: c, kind: 'uscita', amount: 100 - i, date: '2026-10-01', accountId: 'x', category: c })) });
+    const f = monthFlows(d, '2026-10', false, TODAY);
+    expect(f.expenses.map((e) => e.label)).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'Altre spese']);
+    expect(f.expenses.at(-1)!.amount).toBe(94 + 93 + 92);
+  });
+});

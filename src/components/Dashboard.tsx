@@ -23,14 +23,15 @@ import type { Kind, Transaction } from '../types';
 import type { Tab } from '../App';
 import { TransactionForm, TransactionList } from './Transactions';
 import { Alerts, shortfallText, useForecast, WarnIcon } from './Alerts';
+import { SankeyCard } from './Sankey';
 import { Empty, Progress } from './ui';
 
-export function Dashboard({ store, month, goTo }: { store: Store; month: string; goTo: (t: Tab) => void }) {
+export function Dashboard({ store, month, payday, goTo }: { store: Store; month: string; payday: number; goTo: (t: Tab) => void }) {
   const { data } = store;
   const [adding, setAdding] = useState<Kind | null>(null);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const s = monthSummary(data, month);
-  const fc = useForecast(data);
+  const fc = useForecast(data, payday);
   const isCurrent = month === monthOf(today());
   const lastDay = `${month}-31`;
   const balanceDate = isCurrent ? today() : lastDay;
@@ -125,6 +126,8 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
           </p>
         </div>
       )}
+
+      <SankeyCard data={data} month={month} />
 
       <div className="grid-2">
         <section className="card span-2">
