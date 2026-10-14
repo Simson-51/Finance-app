@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { CATEGORIES, euro, formatDate, parseAmount, plannedProgress, sortPlanned, sum, today, uid } from '../finance';
 import type { Store } from '../store';
-import type { Planned, Priority } from '../types';
+import type { Account, Planned, Priority } from '../types';
+import { AccountSelect } from './Accounts';
 import { Empty, Field, Modal, Progress } from './ui';
 
 const PRIORITIES: Priority[] = ['alta', 'media', 'bassa'];
@@ -14,7 +15,7 @@ function PlannedForm({
   onClose,
 }: {
   initial?: Planned;
-  onSave: (p: Planned) => void;
+  onSave: (p: Omit<Planned, 'updatedAt'>) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
@@ -118,7 +119,7 @@ function PlannedForm({
   );
 }
 
-function SaveMoneyForm({ item, onSave, onClose }: { item: Planned; onSave: (p: Planned) => void; onClose: () => void }) {
+function SaveMoneyForm({ item, onSave, onClose }: { item: Planned; onSave: (p: Omit<Planned, 'updatedAt'>) => void; onClose: () => void }) {
   const [amount, setAmount] = useState('');
   const [error, setError] = useState('');
   const submit = (e: FormEvent) => {
@@ -150,8 +151,19 @@ function SaveMoneyForm({ item, onSave, onClose }: { item: Planned; onSave: (p: P
   );
 }
 
-function BuyForm({ item, onBuy, onClose }: { item: Planned; onBuy: (amount: number, date: string) => void; onClose: () => void }) {
+function BuyForm({
+  item,
+  accounts,
+  onBuy,
+  onClose,
+}: {
+  item: Planned;
+  accounts: Account[];
+  onBuy: (amount: number, accountId: string, date: string) => void;
+  onClose: () => void;
+}) {
   const [amount, setAmount] = useState(toInput(item.cost));
+  const [accountId, setAccountId] = useState((accounts.find((a) => !a.archived) ?? accounts[0]).id);
   const [date, setDate] = useState(today());
   const [error, setError] = useState('');
   const submit = (e: FormEvent) => {
@@ -159,7 +171,7 @@ function BuyForm({ item, onBuy, onClose }: { item: Planned; onBuy: (amount: numb
     const v = parseAmount(amount);
     if (!(v > 0)) return setError('Inserisci il prezzo pagato');
     if (!date) return setError('Inserisci la data');
-    onBuy(v, date);
+    onBuy(v, accountId, date);
     onClose();
   };
   return (
@@ -172,6 +184,7 @@ function BuyForm({ item, onBuy, onClose }: { item: Planned; onBuy: (amount: numb
           </Field>
           <Field label="Data">{(id) => <input id={id} type="date" value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
         </div>
+        <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label="Pagato con" />
         {error && <p className="error">{error}</p>}
         <div className="form-actions">
           <span className="spacer" />
@@ -315,7 +328,14 @@ export function PlannedView({ store }: { store: Store }) {
         <PlannedForm initial={editing === 'new' ? undefined : editing} onSave={store.savePlanned} onDelete={store.deletePlanned} onClose={() => setEditing(null)} />
       )}
       {saving && <SaveMoneyForm item={saving} onSave={store.savePlanned} onClose={() => setSaving(null)} />}
-      {buying && <BuyForm item={buying} onBuy={(amount, date) => store.markBought(buying, amount, date)} onClose={() => setBuying(null)} />}
+      {buying && (
+        <BuyForm
+          item={buying}
+          accounts={store.data.accounts}
+          onBuy={(amount, accountId, date) => store.markBought(buying, amount, accountId, date)}
+          onClose={() => setBuying(null)}
+        />
+      )}
     </div>
   );
 }

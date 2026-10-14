@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import {
+  ACCOUNT_TYPES,
+  accountBalance,
   addMonths,
   euro,
   formatDate,
@@ -27,7 +29,9 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
   const s = monthSummary(data, month);
   const isCurrent = month === monthOf(today());
   const lastDay = `${month}-31`;
-  const balanceAtEnd = totalBalance(data.transactions, isCurrent ? today() : lastDay);
+  const balanceDate = isCurrent ? today() : lastDay;
+  const balanceAtEnd = totalBalance(data, balanceDate);
+  const visibleAccounts = data.accounts.filter((a) => !a.archived || accountBalance(data, a, balanceDate) !== 0);
 
   const trend = Array.from({ length: 6 }, (_, i) => addMonths(month, i - 5)).map((m) => ({ month: m, ...monthSummary(data, m) }));
   const trendMax = Math.max(1, ...trend.flatMap((t) => [t.income, t.expenses]));
@@ -40,7 +44,7 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
   const catMax = s.byCategory[0]?.amount ?? 1;
   const defaultDate = isCurrent ? today() : `${month}-01`;
 
-  const isEmpty = !data.transactions.length && !data.recurring.length && !data.planned.length;
+  const isEmpty = !data.transactions.length && !data.recurring.length && !data.planned.length && data.accounts.every((a) => !a.initialBalance);
 
   return (
     <div className="view">
@@ -58,6 +62,9 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
           <h2>Benvenuto! 👋</h2>
           <p>Per iniziare:</p>
           <ol>
+            <li>
+              Inserisci i tuoi <button className="link" onClick={() => goTo('conti')}>conti e carte</button> con il saldo che hanno oggi.
+            </li>
             <li>Registra entrate e uscite con i pulsanti qui sopra.</li>
             <li>
               Aggiungi le <button className="link" onClick={() => goTo('mensili')}>spese mensili</button> fisse (affitto, bollette, abbonamenti…).
@@ -66,7 +73,10 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
               Annota gli <button className="link" onClick={() => goTo('acquisti')}>acquisti in programma</button> per sapere quanto risparmiare.
             </li>
           </ol>
-          <p className="muted small">I dati restano salvati solo su questo dispositivo. Dalle Impostazioni puoi esportare un backup.</p>
+          <p className="muted small">
+            I dati restano su questo dispositivo. Dalle <button className="link" onClick={() => goTo('impostazioni')}>Impostazioni</button> puoi
+            attivare la sincronizzazione cifrata tra telefono e computer.
+          </p>
         </div>
       )}
 
@@ -104,6 +114,31 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
       )}
 
       <div className="grid-2">
+        <section className="card span-2">
+          <div className="card-head">
+            <h3>{isCurrent ? 'Saldo dei conti' : 'Saldo dei conti a fine mese'}</h3>
+            <button className="link" onClick={() => goTo('conti')}>
+              Gestisci
+            </button>
+          </div>
+          <ul className="mini-list account-grid">
+            {visibleAccounts.map((a) => {
+              const balance = accountBalance(data, a, balanceDate);
+              return (
+                <li key={a.id}>
+                  <span className="badge account small" aria-hidden>
+                    {ACCOUNT_TYPES[a.type].icon}
+                  </span>
+                  <span className="list-main">
+                    <span className="list-title">{a.name}</span>
+                  </span>
+                  <span className={`amount ${balance < 0 ? 'uscita' : ''}`}>{euro(balance)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+
         <section className="card">
           <div className="card-head">
             <h3>Spese per categoria</h3>
@@ -219,11 +254,12 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
             Vedi tutti
           </button>
         </div>
-        {recent.length === 0 ? <Empty icon="🧾" title="Nessun movimento in questo mese" /> : <TransactionList txs={recent} onEdit={setEditing} />}
+        {recent.length === 0 ? <Empty icon="🧾" title="Nessun movimento in questo mese" /> : <TransactionList txs={recent} accounts={data.accounts} onEdit={setEditing} />}
       </section>
 
       {(adding || editing) && (
         <TransactionForm
+          accounts={data.accounts}
           initial={editing ?? undefined}
           defaultKind={adding ?? 'uscita'}
           defaultDate={defaultDate}

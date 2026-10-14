@@ -1,4 +1,4 @@
-import type { Data, Kind, Planned, Recurring, Transaction } from './types';
+import type { Account, AccountType, Collection, Data, Kind, Planned, Recurring, Transaction } from './types';
 
 export const CATEGORIES: Record<Kind, string[]> = {
   entrata: ['Stipendio', 'Freelance', 'Rimborsi', 'Regali', 'Investimenti', 'Altro'],
@@ -19,7 +19,36 @@ export const CATEGORIES: Record<Kind, string[]> = {
   ],
 };
 
-export const emptyData = (): Data => ({ version: 1, transactions: [], recurring: [], planned: [] });
+export const ACCOUNT_TYPES: Record<AccountType, { label: string; icon: string }> = {
+  conto: { label: 'Conto corrente', icon: '🏦' },
+  carta: { label: 'Carta', icon: '💳' },
+  contanti: { label: 'Contanti', icon: '💶' },
+  risparmio: { label: 'Risparmi', icon: '🐷' },
+};
+
+/**
+ * Conto creato automaticamente quando non ce n'è nessuno. L'id fisso evita che due
+ * dispositivi appena configurati creino due conti "principali" diversi.
+ */
+export const DEFAULT_ACCOUNT_ID = 'default';
+
+const defaultAccount = (updatedAt = 0): Account => ({
+  id: DEFAULT_ACCOUNT_ID,
+  name: 'Conto principale',
+  type: 'conto',
+  initialBalance: 0,
+  archived: false,
+  updatedAt,
+});
+
+export const emptyData = (): Data => ({
+  version: 2,
+  accounts: [defaultAccount()],
+  transactions: [],
+  recurring: [],
+  planned: [],
+  deleted: {},
+});
 
 export const uid = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -122,9 +151,28 @@ export function monthSummary(data: Data, month: string): MonthSummary {
   };
 }
 
-/** Saldo complessivo di tutti i movimenti fino alla data indicata compresa. */
-export const totalBalance = (txs: Transaction[], upTo = '9999-12-31') =>
-  round(txs.filter((t) => t.date <= upTo).reduce((s, t) => s + (t.kind === 'entrata' ? t.amount : -t.amount), 0));
+/** Effetto di un movimento sul saldo di un conto. */
+export function effectOn(t: Transaction, accountId: string): number {
+  if (t.kind === 'trasferimento') {
+    return (t.toAccountId === accountId ? t.amount : 0) - (t.accountId === accountId ? t.amount : 0);
+  }
+  if (t.accountId !== accountId) return 0;
+  return t.kind === 'entrata' ? t.amount : -t.amount;
+}
+
+/** Saldo di un conto: saldo iniziale più i movimenti fino alla data indicata compresa. */
+export const accountBalance = (data: Pick<Data, 'transactions'>, account: Account, upTo = '9999-12-31') =>
+  round(data.transactions.filter((t) => t.date <= upTo).reduce((s, t) => s + effectOn(t, account.id), account.initialBalance));
+
+/** Saldo complessivo di tutti i conti fino alla data indicata compresa (i trasferimenti si compensano). */
+export const totalBalance = (data: Pick<Data, 'transactions' | 'accounts'>, upTo = '9999-12-31') =>
+  round(data.accounts.reduce((s, a) => s + accountBalance(data, a, upTo), 0));
+
+/** Conti utilizzabili nei moduli; include comunque `keep` se archiviato (per modificare vecchi movimenti). */
+export const usableAccounts = (accounts: Account[], keep?: string) =>
+  accounts.filter((a) => !a.archived || a.id === keep);
+
+export const accountName = (accounts: Account[], id?: string) => accounts.find((a) => a.id === id)?.name ?? 'Conto eliminato';
 
 export interface PlannedProgress {
   remaining: number;
@@ -159,6 +207,40 @@ export function parseAmount(input: string): number {
   return /^-?\d*\.?\d+$/.test(normalized) ? round(Number(normalized)) : NaN;
 }
 
+/**
+ * Porta dati di qualsiasi versione al formato attuale: aggiunge i campi mancanti e,
+ * se non esiste alcun conto, crea il conto principale e vi assegna i movimenti senza conto.
+ */
+export function normalize(raw: Partial<Data> & { version?: number }): Data {
+  const stamp = <T extends object>(x: T) => ({ updatedAt: 0, ...x });
+  const data: Data = {
+    version: 2,
+    accounts: (raw.accounts ?? []).map(stamp),
+    transactions: (raw.transactions ?? []).map(stamp),
+    recurring: (raw.recurring ?? []).map(stamp),
+    planned: (raw.planned ?? []).map(stamp),
+    deleted: raw.deleted ?? {},
+  };
+  return ensureAccount(data);
+}
+
+/** Garantisce che esista almeno un conto e che ogni movimento ne abbia uno. */
+export function ensureAccount(data: Data): Data {
+  let { accounts } = data;
+  if (!accounts.length) {
+    // dopo un'eliminazione sincronizzata il conto predefinito va ricreato con data più recente
+    accounts = [defaultAccount(data.deleted[DEFAULT_ACCOUNT_ID] ? Date.now() : 0)];
+  }
+  const fallback = accounts.find((a) => !a.archived)?.id ?? accounts[0].id;
+  const needsFix = data.transactions.some((t) => !t.accountId);
+  if (accounts === data.accounts && !needsFix) return data;
+  return {
+    ...data,
+    accounts,
+    transactions: needsFix ? data.transactions.map((t) => (t.accountId ? t : { ...t, accountId: fallback })) : data.transactions,
+  };
+}
+
 /** Valida e normalizza un backup importato. Lancia un errore se il file non è valido. */
 export function parseBackup(json: string): Data {
   const raw = JSON.parse(json);
@@ -167,15 +249,66 @@ export function parseBackup(json: string): Data {
   if (!Array.isArray(transactions) || !Array.isArray(recurring) || !Array.isArray(planned)) {
     throw new Error('Il file non contiene un backup di questa app');
   }
-  return { version: 1, transactions, recurring, planned };
+  return normalize(raw);
 }
 
-export function toCsv(txs: Transaction[]): string {
+const COLLECTIONS: Collection[] = ['accounts', 'transactions', 'recurring', 'planned'];
+
+/**
+ * Unisce i dati di due dispositivi: per ogni record vince la versione con `updatedAt` più
+ * recente; un record eliminato resta eliminato a meno che non sia stato modificato dopo.
+ * L'operazione è commutativa e idempotente, quindi si può ripetere senza effetti collaterali.
+ */
+export function merge(a: Data, b: Data): Data {
+  const deleted: Record<string, number> = { ...a.deleted };
+  for (const [id, at] of Object.entries(b.deleted)) deleted[id] = Math.max(deleted[id] ?? 0, at);
+
+  const pick = <T extends { id: string; updatedAt: number }>(x: T[], y: T[]): T[] => {
+    const map = new Map<string, T>();
+    for (const item of [...x, ...y]) {
+      const cur = map.get(item.id);
+      // a parità di data si sceglie in modo deterministico, così entrambi i dispositivi ottengono lo stesso risultato
+      if (!cur || item.updatedAt > cur.updatedAt || (item.updatedAt === cur.updatedAt && JSON.stringify(item) > JSON.stringify(cur))) {
+        map.set(item.id, item);
+      }
+    }
+    return [...map.values()].filter((item) => !(deleted[item.id] >= item.updatedAt));
+  };
+
+  return ensureAccount({
+    version: 2,
+    accounts: pick(a.accounts, b.accounts),
+    transactions: pick(a.transactions, b.transactions),
+    recurring: pick(a.recurring, b.recurring),
+    planned: pick(a.planned, b.planned),
+    deleted,
+  });
+}
+
+/** Confronta due insiemi di dati ignorando l'ordine dei record. */
+export function sameData(a: Data, b: Data): boolean {
+  const canon = (d: Data) =>
+    JSON.stringify([
+      ...COLLECTIONS.map((c) => [...(d[c] as { id: string }[])].sort((x, y) => x.id.localeCompare(y.id))),
+      Object.entries(d.deleted).sort(([x], [y]) => x.localeCompare(y)),
+    ]);
+  return canon(a) === canon(b);
+}
+
+export function toCsv(data: Pick<Data, 'transactions' | 'accounts'>): string {
   const esc = (v: string) => (/[";\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-  const rows = [...txs]
+  const rows = [...data.transactions]
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((t) =>
-      [t.date, t.kind, t.category, esc(t.description), (t.kind === 'uscita' ? -t.amount : t.amount).toFixed(2).replace('.', ',')].join(';'),
+      [
+        t.date,
+        t.kind,
+        esc(accountName(data.accounts, t.accountId)),
+        esc(t.kind === 'trasferimento' ? accountName(data.accounts, t.toAccountId) : ''),
+        esc(t.category),
+        esc(t.description),
+        (t.kind === 'uscita' ? -t.amount : t.amount).toFixed(2).replace('.', ','),
+      ].join(';'),
     );
-  return ['Data;Tipo;Categoria;Descrizione;Importo', ...rows].join('\n');
+  return ['Data;Tipo;Conto;Conto di arrivo;Categoria;Descrizione;Importo', ...rows].join('\n');
 }

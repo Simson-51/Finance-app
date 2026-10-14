@@ -1,21 +1,27 @@
 import { useEffect, useState } from 'react';
 import { addMonths, formatMonth, monthOf, today } from './finance';
 import { useStore } from './store';
+import { useSync } from './useSync';
 import { Dashboard } from './components/Dashboard';
 import { TransactionsView } from './components/Transactions';
 import { RecurringView } from './components/Recurring';
 import { PlannedView } from './components/Planned';
-import { SettingsView, type Theme } from './components/Settings';
+import { SettingsView, timeAgo, type Theme } from './components/Settings';
+import { AccountsView } from './components/Accounts';
 
-export type Tab = 'home' | 'movimenti' | 'mensili' | 'acquisti' | 'impostazioni';
+export type Tab = 'home' | 'movimenti' | 'conti' | 'mensili' | 'acquisti' | 'impostazioni';
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'home', label: 'Riepilogo', icon: '◎' },
   { id: 'movimenti', label: 'Movimenti', icon: '⇅' },
+  { id: 'conti', label: 'Conti', icon: '💳' },
   { id: 'mensili', label: 'Mensili', icon: '📅' },
   { id: 'acquisti', label: 'Acquisti', icon: '🛍️' },
   { id: 'impostazioni', label: 'Impostazioni', icon: '⚙' },
 ];
+
+/** Sul telefono le impostazioni si aprono dall'icona in alto, per lasciare spazio alle altre sezioni. */
+const MOBILE_TABS = TABS.filter((t) => t.id !== 'impostazioni');
 
 const readPref = <T extends string>(key: string, fallback: T, allowed: readonly T[]): T => {
   try {
@@ -36,6 +42,7 @@ const writePref = (key: string, value: string) => {
 
 export default function App() {
   const store = useStore();
+  const sync = useSync(store);
   const [tab, setTab] = useState<Tab>(() => readPref('finanze:tab', 'home', TABS.map((t) => t.id)));
   const [month, setMonth] = useState(monthOf(today()));
   const [theme, setTheme] = useState<Theme>(() => readPref('finanze:theme', 'auto', ['auto', 'light', 'dark'] as const));
@@ -57,13 +64,40 @@ export default function App() {
           <img src="./icon.svg" alt="" width={28} height={28} />
           <span>Le mie finanze</span>
         </div>
-        <nav className="tabs desktop-only" aria-label="Sezioni">
-          {TABS.map((t) => (
-            <button key={t.id} className={tab === t.id ? 'active' : ''} aria-current={tab === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}>
-              {t.label}
+        <div className="topbar-right">
+          {sync.enabled && (
+            <button
+              className={`sync-chip ${sync.status.state}`}
+              onClick={() => (sync.status.state === 'error' ? setTab('impostazioni') : sync.syncNow())}
+              title={
+                sync.status.state === 'error'
+                  ? `Errore di sincronizzazione: ${sync.status.message}`
+                  : sync.status.lastSync
+                    ? `Sincronizzato ${timeAgo(sync.status.lastSync)}`
+                    : 'Sincronizzazione'
+              }
+              aria-label="Stato sincronizzazione"
+            >
+              <span className="sync-dot" aria-hidden />
+              <span className="sync-label">{sync.status.state === 'syncing' ? 'Sincronizzo…' : sync.status.state === 'error' ? 'Errore sync' : 'Sincronizzato'}</span>
             </button>
-          ))}
-        </nav>
+          )}
+          <nav className="tabs desktop-only" aria-label="Sezioni">
+            {TABS.map((t) => (
+              <button key={t.id} className={tab === t.id ? 'active' : ''} aria-current={tab === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}>
+                {t.label}
+              </button>
+            ))}
+          </nav>
+          <button
+            className={`icon-btn mobile-only ${tab === 'impostazioni' ? 'active' : ''}`}
+            aria-label="Impostazioni"
+            aria-current={tab === 'impostazioni' ? 'page' : undefined}
+            onClick={() => setTab('impostazioni')}
+          >
+            ⚙
+          </button>
+        </div>
       </header>
 
       {showMonth && (
@@ -88,13 +122,14 @@ export default function App() {
       <main>
         {tab === 'home' && <Dashboard store={store} month={month} goTo={setTab} />}
         {tab === 'movimenti' && <TransactionsView store={store} month={month} />}
+        {tab === 'conti' && <AccountsView store={store} />}
         {tab === 'mensili' && <RecurringView store={store} month={month} />}
         {tab === 'acquisti' && <PlannedView store={store} />}
-        {tab === 'impostazioni' && <SettingsView store={store} theme={theme} setTheme={setTheme} />}
+        {tab === 'impostazioni' && <SettingsView store={store} sync={sync} theme={theme} setTheme={setTheme} />}
       </main>
 
       <nav className="bottom-nav mobile-only" aria-label="Sezioni">
-        {TABS.map((t) => (
+        {MOBILE_TABS.map((t) => (
           <button key={t.id} className={tab === t.id ? 'active' : ''} aria-current={tab === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}>
             <span aria-hidden>{t.icon}</span>
             <span>{t.label}</span>

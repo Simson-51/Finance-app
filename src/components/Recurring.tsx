@@ -1,17 +1,20 @@
 import { useState, type FormEvent } from 'react';
 import { CATEGORIES, euro, parseAmount, recurringDate, recurringPayment, sum, formatDate, uid } from '../finance';
 import type { Store } from '../store';
-import type { Kind, Recurring } from '../types';
+import type { Account, Kind, Recurring } from '../types';
+import { AccountSelect } from './Accounts';
 import { Empty, Field, Modal, Progress } from './ui';
 
 function RecurringForm({
+  accounts,
   initial,
   onSave,
   onDelete,
   onClose,
 }: {
+  accounts: Account[];
   initial?: Recurring;
-  onSave: (r: Recurring) => void;
+  onSave: (r: Omit<Recurring, 'updatedAt'>) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
@@ -21,6 +24,9 @@ function RecurringForm({
   const [category, setCategory] = useState(initial?.category ?? 'Bollette');
   const [day, setDay] = useState(String(initial?.day ?? 1));
   const [active, setActive] = useState(initial?.active ?? true);
+  const [accountId, setAccountId] = useState(
+    accounts.find((a) => a.id === initial?.accountId)?.id ?? accounts.find((a) => !a.archived)?.id ?? accounts[0].id,
+  );
   const [error, setError] = useState('');
 
   const switchKind = (k: Kind) => {
@@ -35,7 +41,7 @@ function RecurringForm({
     if (!name.trim()) return setError('Inserisci un nome');
     if (!(value > 0)) return setError('Inserisci un importo maggiore di zero');
     if (!Number.isInteger(d) || d < 1 || d > 31) return setError('Il giorno deve essere tra 1 e 31');
-    onSave({ id: initial?.id ?? uid(), kind, name: name.trim(), amount: value, category, day: d, active });
+    onSave({ id: initial?.id ?? uid(), kind, name: name.trim(), amount: value, category, day: d, active, accountId });
     onClose();
   };
 
@@ -69,6 +75,7 @@ function RecurringForm({
             </select>
           )}
         </Field>
+        <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label={kind === 'uscita' ? 'Pagata con' : 'Accreditata su'} />
         <label className="check">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
           Attiva (conteggiata ogni mese)
@@ -194,6 +201,7 @@ export function RecurringView({ store, month }: { store: Store; month: string })
 
       {editing && (
         <RecurringForm
+          accounts={store.data.accounts}
           initial={editing === 'new' ? undefined : editing}
           onSave={store.saveRecurring}
           onDelete={store.deleteRecurring}
