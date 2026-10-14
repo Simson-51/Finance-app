@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { accountName, CATEGORIES, euro, formatDate, monthOf, parseAmount, sum, today, transactionsIn, uid, usableAccounts } from '../finance';
+import { accountName, CATEGORIES, euro, formatDate, isFuture, isVisible, monthOf, parseAmount, sum, today, transactionsIn, uid, usableAccounts } from '../finance';
 import type { Store } from '../store';
 import type { Account, Kind, Transaction, TxKind } from '../types';
 import { AccountSelect } from './Accounts';
@@ -112,11 +112,20 @@ export function TransactionForm({
             </Field>
           )}
         </div>
+        {date > today() && (
+          <p className="note">
+            📅 <strong>Movimento previsto</strong>: non cambia il saldo di oggi ma conta nelle previsioni e negli avvisi. Dal{' '}
+            {formatDate(date)} diventerà effettivo da solo.
+          </p>
+        )}
+        {initial?.autoTopUp && (
+          <p className="note">⇄ Ricarica automatica: l'importo viene ricalcolato dall'app per mantenere il budget minimo del conto.</p>
+        )}
         <Field label="Descrizione">
           {(id) => (
             <input
               id={id}
-              placeholder={kind === 'trasferimento' ? 'Es. Ricarica carta' : 'Es. Spesa al supermercato'}
+              placeholder={kind === 'trasferimento' ? 'Es. Ricarica Satispay' : kind === 'entrata' ? 'Es. Welfare aziendale' : 'Es. Spesa al supermercato'}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
@@ -154,13 +163,26 @@ export function TransactionForm({
 const BADGE: Record<TxKind, string> = { entrata: '↓', uscita: '↑', trasferimento: '⇄' };
 const SIGN: Record<TxKind, string> = { entrata: '+', uscita: '−', trasferimento: '' };
 
-export function TransactionList({ txs, accounts, onEdit }: { txs: Transaction[]; accounts: Account[]; onEdit: (t: Transaction) => void }) {
+export function TransactionList({
+  txs,
+  accounts,
+  onEdit,
+  ascending = false,
+}: {
+  txs: Transaction[];
+  accounts: Account[];
+  onEdit: (t: Transaction) => void;
+  /** true per mostrare prima i più vicini (movimenti previsti). */
+  ascending?: boolean;
+}) {
+  const now = today();
   const groups = useMemo(() => {
-    const sorted = [...txs].sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt - a.updatedAt);
+    const dir = ascending ? -1 : 1;
+    const sorted = txs.filter(isVisible).sort((a, b) => dir * (b.date.localeCompare(a.date) || b.updatedAt - a.updatedAt));
     const map = new Map<string, Transaction[]>();
     for (const t of sorted) map.set(t.date, [...(map.get(t.date) ?? []), t]);
     return [...map];
-  }, [txs]);
+  }, [txs, ascending]);
   const multi = accounts.length > 1;
 
   return (
@@ -171,15 +193,18 @@ export function TransactionList({ txs, accounts, onEdit }: { txs: Transaction[];
           <ul className="list card">
             {list.map((t) => (
               <li key={t.id}>
-                <button className="list-item" onClick={() => onEdit(t)}>
+                <button className={`list-item ${isFuture(t, now) ? 'future' : ''}`} onClick={() => onEdit(t)}>
                   <span className={`badge ${t.kind}`} aria-hidden>
                     {BADGE[t.kind]}
                   </span>
                   <span className="list-main">
-                    <span className="list-title">{t.description || t.category}</span>
+                    <span className="list-title with-icon">
+                      <span className="truncate">{t.description || t.category}</span>
+                      {isFuture(t, now) && <span className="tag">Previsto</span>}
+                    </span>
                     <span className="list-sub">
                       {t.kind === 'trasferimento'
-                        ? `${accountName(accounts, t.accountId)} → ${accountName(accounts, t.toAccountId)}`
+                        ? `${accountName(accounts, t.accountId)} → ${accountName(accounts, t.toAccountId)}${t.autoTopUp ? ' · automatica' : ''}`
                         : [t.category, multi && accountName(accounts, t.accountId), t.recurringId && 'mensile', t.plannedId && 'acquisto programmato']
                             .filter(Boolean)
                             .join(' · ')}
@@ -209,7 +234,7 @@ export function TransactionsView({ store, month }: { store: Store; month: string
   const [editing, setEditing] = useState<Transaction | 'new' | null>(null);
   const { accounts } = store.data;
 
-  const monthTxs = transactionsIn(store.data.transactions, month);
+  const monthTxs = transactionsIn(store.data.transactions, month).filter(isVisible);
   const categories = [...new Set(monthTxs.filter((t) => t.kind !== 'trasferimento').map((t) => t.category))].sort();
   const q = query.trim().toLowerCase();
   const visible = monthTxs.filter(
@@ -219,8 +244,13 @@ export function TransactionsView({ store, month }: { store: Store; month: string
       (!account || t.accountId === account || t.toAccountId === account) &&
       (!q || t.description.toLowerCase().includes(q) || t.category.toLowerCase().includes(q)),
   );
-  const income = sum(visible.filter((t) => t.kind === 'entrata'));
-  const expenses = sum(visible.filter((t) => t.kind === 'uscita'));
+  const now = today();
+  const done = visible.filter((t) => !isFuture(t, now));
+  const planned = visible.filter((t) => isFuture(t, now));
+  const income = sum(done.filter((t) => t.kind === 'entrata'));
+  const expenses = sum(done.filter((t) => t.kind === 'uscita'));
+  const plannedIn = sum(planned.filter((t) => t.kind === 'entrata'));
+  const plannedOut = sum(planned.filter((t) => t.kind === 'uscita'));
   const hasTransfers = accounts.length > 1 || monthTxs.some((t) => t.kind === 'trasferimento');
   const filters: Filter[] = hasTransfers ? ['tutti', 'entrata', 'uscita', 'trasferimento'] : ['tutti', 'entrata', 'uscita'];
 
@@ -274,6 +304,12 @@ export function TransactionsView({ store, month }: { store: Store; month: string
           <span>
             Saldo <strong>{euro(income - expenses)}</strong>
           </span>
+          {(plannedIn > 0 || plannedOut > 0) && (
+            <span className="planned-strip">
+              Previsti: {plannedIn > 0 && <strong className="amount entrata">+{euro(plannedIn)}</strong>}{' '}
+              {plannedOut > 0 && <strong className="amount uscita">−{euro(plannedOut)}</strong>}
+            </span>
+          )}
         </div>
       )}
 
@@ -282,7 +318,15 @@ export function TransactionsView({ store, month }: { store: Store; month: string
           {!monthTxs.length && 'Aggiungi la tua prima entrata o uscita con il pulsante “Aggiungi”.'}
         </Empty>
       ) : (
-        <TransactionList txs={visible} accounts={accounts} onEdit={setEditing} />
+        <>
+          {planned.length > 0 && (
+            <section>
+              <h3 className="group-title">Previsti</h3>
+              <TransactionList txs={planned} accounts={accounts} onEdit={setEditing} ascending />
+            </section>
+          )}
+          {done.length > 0 && <TransactionList txs={done} accounts={accounts} onEdit={setEditing} />}
+        </>
       )}
 
       {editing && (

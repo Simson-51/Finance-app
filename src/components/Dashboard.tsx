@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import {
   ACCOUNT_TYPES,
+  isFuture,
+  isVisible,
   accountBalance,
   addMonths,
   euro,
@@ -20,6 +22,7 @@ import type { Store } from '../store';
 import type { Kind, Transaction } from '../types';
 import type { Tab } from '../App';
 import { TransactionForm, TransactionList } from './Transactions';
+import { Alerts, shortfallText, useForecast, WarnIcon } from './Alerts';
 import { Empty, Progress } from './ui';
 
 export function Dashboard({ store, month, goTo }: { store: Store; month: string; goTo: (t: Tab) => void }) {
@@ -27,6 +30,7 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
   const [adding, setAdding] = useState<Kind | null>(null);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const s = monthSummary(data, month);
+  const fc = useForecast(data);
   const isCurrent = month === monthOf(today());
   const lastDay = `${month}-31`;
   const balanceDate = isCurrent ? today() : lastDay;
@@ -40,7 +44,14 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
     .filter((r) => r.active && !recurringPayment(data.transactions, r, month))
     .sort((a, b) => a.day - b.day);
   const planned = sortPlanned(data.planned.filter((p) => !p.boughtDate)).slice(0, 3);
-  const recent = [...transactionsIn(data.transactions, month)].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+  const recent = transactionsIn(data.transactions, month)
+    .filter((t) => isVisible(t) && !isFuture(t))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 5);
+  const upcoming = data.transactions
+    .filter((t) => isVisible(t) && isFuture(t))
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, 5);
   const catMax = s.byCategory[0]?.amount ?? 1;
   const defaultDate = isCurrent ? today() : `${month}-01`;
 
@@ -48,6 +59,8 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
 
   return (
     <div className="view">
+      <Alerts store={store} fc={fc} />
+
       <div className="quick-add">
         <button className="btn income" onClick={() => setAdding('entrata')}>
           + Entrata
@@ -106,7 +119,7 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
             <strong className={s.forecast >= 0 ? 'big amount entrata' : 'big amount uscita'}>{euro(s.forecast)}</strong>
           </div>
           <p className="small muted">
-            Considerando le voci mensili non ancora registrate
+            Considerando i movimenti previsti e le voci mensili non ancora registrate
             {s.pendingExpenses > 0 && <> (−{euro(s.pendingExpenses)} di spese</>}
             {s.pendingIncome > 0 && <>{s.pendingExpenses > 0 ? ', ' : ' ('}+{euro(s.pendingIncome)} di entrate</>})
           </p>
@@ -130,7 +143,12 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
                     {ACCOUNT_TYPES[a.type].icon}
                   </span>
                   <span className="list-main">
-                    <span className="list-title">{a.name}</span>
+                    <span className="list-title with-icon">
+                      <span className="truncate">{a.name}</span>
+                      {fc.accounts[a.id]?.shortfall > 0 && (
+                        <WarnIcon title={shortfallText(fc.accounts[a.id].shortfall, fc.accounts[a.id].shortDate)} />
+                      )}
+                    </span>
                   </span>
                   <span className={`amount ${balance < 0 ? 'uscita' : ''}`}>{euro(balance)}</span>
                 </li>
@@ -246,6 +264,15 @@ export function Dashboard({ store, month, goTo }: { store: Store; month: string;
           )}
         </section>
       </div>
+
+      {upcoming.length > 0 && (
+        <section>
+          <div className="card-head">
+            <h3>Movimenti previsti</h3>
+          </div>
+          <TransactionList txs={upcoming} accounts={data.accounts} onEdit={setEditing} ascending />
+        </section>
+      )}
 
       <section>
         <div className="card-head">
