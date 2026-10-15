@@ -1,6 +1,6 @@
 // Service worker: rende l'app utilizzabile offline e sempre aggiornata.
 // Pagine: prima la rete (scavalcando la cache HTTP), poi la cache. Risorse statiche: prima la cache, poi la rete.
-const CACHE = 'finanze-v2';
+const CACHE = 'finanze-v3';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -48,5 +48,16 @@ self.addEventListener('fetch', (event) => {
           return res;
         }),
     ),
+  );
+});
+
+// Tocco su un promemoria: porta in primo piano l'app (o la apre).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const open = list.find((c) => 'focus' in c);
+      return open ? open.focus() : self.clients.openWindow('./');
+    }),
   );
 });

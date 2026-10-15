@@ -8,7 +8,9 @@ App web (installabile anche su telefono e computer come PWA) per gestire le fina
 - **Movimenti previsti**: entrate, uscite e trasferimenti con data futura (es. il welfare aziendale in arrivo) non cambiano il saldo di oggi ma contano nelle previsioni, e diventano effettivi da soli alla data indicata.
 - **Avviso soldi insufficienti** ⚠️: l'app simula i saldi fino al giorno prima del prossimo stipendio (giorno impostabile, predefinito il 15) considerando movimenti previsti, voci mensili da pagare e ricariche, e segnala con un triangolo giallo i conti che non coprirebbero i pagamenti; l'avviso sparisce quando i soldi bastano.
 - **Flusso dei soldi**: dal riepilogo si apre un diagramma di Sankey del mese (entrate per categoria → spese per categoria e risparmio), con vista a tabella.
-- **Spese mensili**: imposta le voci fisse (affitto, bollette, abbonamenti, stipendio…) e ogni mese segnale come pagate/incassate con un tocco; il movimento viene registrato in automatico.
+- **Spese ricorrenti**: voci fisse (affitto, bollette, abbonamenti, stipendio…) con giorno, primo addebito, frequenza (ogni mese, 2, 3, 6 mesi o ogni anno) ed eventuale numero di rate; alla scadenza vengono registrate da sole tra i movimenti (oppure le spunti tu).
+- **Andamento del saldo**: grafico del saldo totale giorno per giorno (1, 3, 6 o 12 mesi) con la previsione tratteggiata fino al prossimo stipendio.
+- **Promemoria**: all'apertura dell'app una notifica ricorda i pagamenti di domani, le voci scadute da registrare e gli avvisi sui conti (su iPhone serve l'app aggiunta alla schermata Home).
 - **Acquisti in programma**: annota cosa vuoi comprare, il costo, la priorità e la data obiettivo; l'app calcola quanto mettere da parte ogni mese. Quando compri, l'uscita viene registrata.
 - **Riepilogo mensile**: entrate, uscite, saldo, previsione di fine mese (con le voci fisse ancora da registrare), spese per categoria e andamento degli ultimi 6 mesi.
 - **Backup**: esporta/importa i dati in JSON ed esporta i movimenti in CSV (apribile con Excel).

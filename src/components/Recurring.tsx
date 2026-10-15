@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { CATEGORIES, euro, parseAmount, recurringDate, recurringPayment, sum, formatDate, uid } from '../finance';
+import { addMonths, CATEGORIES, defaultStartMonth, endMonthFor, FREQUENCIES, installmentNumber, installmentsTotal, nextDueMonth, recurringEvery, euro, formatMonth, monthOf, parseAmount, recurringDate, recurringDue, recurringPayment, recurringStart, sum, formatDate, today, uid } from '../finance';
 import type { Store } from '../store';
 import type { Account, Kind, Recurring } from '../types';
 import { AccountSelect } from './Accounts';
@@ -24,6 +24,16 @@ function RecurringForm({
   const [category, setCategory] = useState(initial?.category ?? 'Bollette');
   const [day, setDay] = useState(String(initial?.day ?? 1));
   const [active, setActive] = useState(initial?.active ?? true);
+  // per una voce nuova il primo mese segue il giorno scelto, finché non lo si cambia a mano
+  const [startMonth, setStartMonth] = useState(initial ? recurringStart(initial) : defaultStartMonth(1));
+  const [startTouched, setStartTouched] = useState(!!initial);
+  const [every, setEvery] = useState(initial ? recurringEvery(initial) : 1);
+  const [limited, setLimited] = useState(!!initial?.endMonth);
+  const [count, setCount] = useState(String((initial && installmentsTotal(initial)) ?? 12));
+  const [autoPay, setAutoPay] = useState(initial?.autoPay ?? !initial);
+  const current = monthOf(today());
+  const months = Array.from({ length: 15 }, (_, i) => addMonths(current, i - 2));
+  if (!months.includes(startMonth)) months.unshift(startMonth);
   const [accountId, setAccountId] = useState(
     accounts.find((a) => a.id === initial?.accountId)?.id ?? accounts.find((a) => !a.archived)?.id ?? accounts[0].id,
   );
@@ -41,7 +51,22 @@ function RecurringForm({
     if (!name.trim()) return setError('Inserisci un nome');
     if (!(value > 0)) return setError('Inserisci un importo maggiore di zero');
     if (!Number.isInteger(d) || d < 1 || d > 31) return setError('Il giorno deve essere tra 1 e 31');
-    onSave({ id: initial?.id ?? uid(), kind, name: name.trim(), amount: value, category, day: d, active, accountId });
+    const n = Number(count);
+    if (limited && (!Number.isInteger(n) || n < 1 || n > 360)) return setError('Il numero di rate deve essere tra 1 e 360');
+    onSave({
+      id: initial?.id ?? uid(),
+      kind,
+      name: name.trim(),
+      amount: value,
+      category,
+      day: d,
+      active,
+      accountId,
+      startMonth,
+      everyMonths: every,
+      endMonth: limited ? endMonthFor(startMonth, every, n) : undefined,
+      autoPay,
+    });
     onClose();
   };
 
@@ -63,9 +88,78 @@ function RecurringForm({
             {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={amount} onChange={(e) => setAmount(e.target.value)} />}
           </Field>
           <Field label="Giorno del mese">
-            {(id) => <input id={id} type="number" min={1} max={31} value={day} onChange={(e) => setDay(e.target.value)} />}
+            {(id) => (
+              <input
+                id={id}
+                type="number"
+                min={1}
+                max={31}
+                value={day}
+                onChange={(e) => {
+                  setDay(e.target.value);
+                  const d = Number(e.target.value);
+                  if (!startTouched && d >= 1 && d <= 31) setStartMonth(defaultStartMonth(d));
+                }}
+              />
+            )}
           </Field>
         </div>
+        <Field
+          label="Primo addebito"
+          hint={`I mesi precedenti non vengono contati. Primo ${kind === 'uscita' ? 'pagamento' : 'incasso'}: ${
+            Number(day) >= 1 && Number(day) <= 31 ? formatDate(recurringDate({ day: Number(day) } as Recurring, startMonth)) : '—'
+          }.`}
+        >
+          {(id) => (
+            <select
+              id={id}
+              value={startMonth}
+              onChange={(e) => {
+                setStartMonth(e.target.value);
+                setStartTouched(true);
+              }}
+            >
+              {months.map((m) => (
+                <option key={m} value={m}>
+                  {formatMonth(m)}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <div className="row-2">
+          <Field label="Frequenza">
+            {(id) => (
+              <select id={id} value={every} onChange={(e) => setEvery(Number(e.target.value))}>
+                {FREQUENCIES.map((f) => (
+                  <option key={f.months} value={f.months}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Termina">
+            {(id) => (
+              <select id={id} value={limited ? 'rate' : 'mai'} onChange={(e) => setLimited(e.target.value === 'rate')}>
+                <option value="mai">Mai</option>
+                <option value="rate">Dopo un numero di rate</option>
+              </select>
+            )}
+          </Field>
+        </div>
+        {limited && (
+          <Field
+            label="Numero di rate"
+            hint={
+              Number(count) >= 1
+                ? `Ultima rata: ${formatDate(recurringDate({ day: Number(day) || 1 } as Recurring, endMonthFor(startMonth, every, Number(count))))}.`
+                : undefined
+            }
+          >
+            {(id) => <input id={id} type="number" min={1} max={360} inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value)} />}
+          </Field>
+        )}
         <Field label="Categoria">
           {(id) => (
             <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
@@ -77,8 +171,17 @@ function RecurringForm({
         </Field>
         <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label={kind === 'uscita' ? 'Pagata con' : 'Accreditata su'} />
         <label className="check">
+          <input type="checkbox" checked={autoPay} onChange={(e) => setAutoPay(e.target.checked)} />
+          Registra in automatico alla scadenza
+        </label>
+        <small className="muted check-hint">
+          {autoPay
+            ? `Il giorno dell'addebito l'app la segna da sola come ${kind === 'uscita' ? 'pagata' : 'incassata'}. Se non è avvenuto, togli la spunta in Mensili.`
+            : `Ogni mese la segni tu come ${kind === 'uscita' ? 'pagata' : 'incassata'} con un tocco.`}
+        </small>
+        <label className="check">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-          Attiva (conteggiata ogni mese)
+          Attiva
         </label>
         {error && <p className="error">{error}</p>}
         <div className="form-actions">
@@ -113,8 +216,8 @@ export function RecurringView({ store, month }: { store: Store; month: string })
   const [editing, setEditing] = useState<Recurring | 'new' | null>(null);
   const { recurring, transactions } = store.data;
   const sorted = [...recurring].sort((a, b) => Number(b.active) - Number(a.active) || a.day - b.day || a.name.localeCompare(b.name));
-  const activeExpenses = recurring.filter((r) => r.active && r.kind === 'uscita');
-  const activeIncome = recurring.filter((r) => r.active && r.kind === 'entrata');
+  const activeExpenses = recurring.filter((r) => recurringDue(r, month) && r.kind === 'uscita');
+  const activeIncome = recurring.filter((r) => recurringDue(r, month) && r.kind === 'entrata');
   const paid = activeExpenses.filter((r) => recurringPayment(transactions, r, month));
   const totalExpenses = sum(activeExpenses);
   const paidAmount = sum(paid);
@@ -128,12 +231,27 @@ export function RecurringView({ store, month }: { store: Store; month: string })
         <ul className="list card">
           {list.map((r) => {
             const payment = recurringPayment(transactions, r, month);
+            const due = recurringDue(r, month);
+            const total = installmentsTotal(r);
+            const every = recurringEvery(r);
+            /** Quando non è dovuta in questo mese: da quando, la prossima volta o se è finita. */
+            const whenNext = () => {
+              const next = nextDueMonth(r, month);
+              if (!next) return r.endMonth && month > r.endMonth ? 'rate terminate' : 'nessun addebito in programma';
+              const label = formatMonth(next).toLowerCase();
+              return month < recurringStart(r) ? `inizia a ${label}` : `prossima a ${label}`;
+            };
+            const details = [
+              every > 1 && FREQUENCIES.find((f) => f.months === every)?.label.toLowerCase(),
+              due && total && `rata ${installmentNumber(r, month)} di ${total}`,
+              r.autoPay && r.active && 'automatica',
+            ].filter(Boolean);
             return (
-              <li key={r.id} className={r.active ? '' : 'inactive'}>
+              <li key={r.id} className={due ? '' : 'inactive'}>
                 <div className="list-item">
                   <button
                     className={`tick ${payment ? 'done' : ''}`}
-                    disabled={!r.active && !payment}
+                    disabled={!due && !payment}
                     aria-label={payment ? `Annulla registrazione di ${r.name}` : `Segna ${r.name} come ${kind === 'uscita' ? 'pagata' : 'incassata'}`}
                     title={payment ? 'Registrata questo mese (clicca per annullare)' : kind === 'uscita' ? 'Segna come pagata' : 'Segna come incassata'}
                     onClick={() => store.toggleRecurringPaid(r, month)}
@@ -143,8 +261,10 @@ export function RecurringView({ store, month }: { store: Store; month: string })
                   <button className="list-main as-button" onClick={() => setEditing(r)}>
                     <span className="list-title">{r.name}</span>
                     <span className="list-sub">
-                      {r.category} · {r.active ? `il ${formatDate(recurringDate(r, month)).replace(/ \d{4}$/, '')}` : 'disattivata'}
+                      {r.category} ·{' '}
+                      {!r.active ? 'disattivata' : due ? `il ${formatDate(recurringDate(r, month)).replace(/ \d{4}$/, '')}` : whenNext()}
                       {payment && (kind === 'uscita' ? ' · pagata' : ' · incassata')}
+                      {details.length > 0 && ` · ${details.join(' · ')}`}
                     </span>
                   </button>
                   <span className={`amount ${r.kind}`}>{euro(r.amount)}</span>
@@ -194,6 +314,19 @@ export function RecurringView({ store, month }: { store: Store; month: string })
               </>
             )}
           </div>
+          {recurring.some((r) => r.active && !r.autoPay) && (
+            <div className="note autopay-note">
+              <span>
+                ⚡ Vuoi che le voci vengano segnate come pagate/incassate da sole il giorno dell'addebito?
+              </span>
+              <button
+                className="btn primary small"
+                onClick={() => recurring.filter((r) => r.active && !r.autoPay).forEach((r) => store.saveRecurring({ ...r, autoPay: true }))}
+              >
+                Attiva per tutte
+              </button>
+            </div>
+          )}
           {section('uscita')}
           {section('entrata')}
         </>

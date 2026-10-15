@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { addMonths, DEFAULT_PAYDAY, formatMonth, monthOf, today } from './finance';
 import { useStore } from './store';
 import { useSync } from './useSync';
+import { notifyIfNeeded } from './notify';
 import { Dashboard } from './components/Dashboard';
 import { TransactionsView } from './components/Transactions';
 import { RecurringView } from './components/Recurring';
@@ -51,6 +52,25 @@ export default function App() {
     return Number(readPref('finanze:payday', String(DEFAULT_PAYDAY), days));
   });
   useEffect(() => writePref('finanze:payday', String(payday)), [payday]);
+
+  // Promemoria: all'apertura e quando l'app torna in primo piano, dopo qualche secondo per
+  // lasciare il tempo alla sincronizzazione di portare i dati degli altri dispositivi.
+  const latest = useRef({ data: store.data, payday });
+  latest.current = { data: store.data, payday };
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => notifyIfNeeded(latest.current.data, latest.current.payday).catch(() => {}), 4000);
+    };
+    const onVisible = () => document.visibilityState === 'visible' && check();
+    check();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
 
   useEffect(() => writePref('finanze:tab', tab), [tab]);
   useEffect(() => {

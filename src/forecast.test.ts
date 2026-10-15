@@ -219,3 +219,140 @@ describe('flussi del mese (Sankey)', () => {
     expect(f.expenses.at(-1)!.amount).toBe(94 + 93 + 92);
   });
 });
+
+describe('primo addebito delle voci mensili', () => {
+  it('una spesa del giorno 1 creata il 15 parte dal mese dopo', async () => {
+    const { defaultStartMonth, recurringStart } = await import('./finance');
+    expect(defaultStartMonth(1, '2026-10-15')).toBe('2026-11');
+    expect(defaultStartMonth(15, '2026-10-15')).toBe('2026-10');
+    expect(defaultStartMonth(31, '2026-02-28')).toBe('2026-02');
+    // voce creata prima dell'opzione: si deduce dall'ultima modifica
+    expect(recurringStart(rec({ id: 'g', amount: 70, day: 1, updatedAt: new Date('2026-10-15T09:00:00').getTime() }))).toBe('2026-11');
+    expect(recurringStart(rec({ id: 'g', amount: 70, day: 1, startMonth: '2026-10' }))).toBe('2026-10');
+  });
+
+  it('il garage aggiunto oggi non viene contato come scaduto a ottobre', () => {
+    const d = data({
+      accounts: [account({ id: 'hype', initialBalance: 100 })],
+      recurring: [rec({ id: 'garage', amount: 70, day: 1, accountId: 'hype', startMonth: '2026-11' })],
+    });
+    const events = scheduledEvents(d, '2026-10-15', '2026-11-14');
+    expect(events.map((e) => e.date)).toEqual(['2026-11-01']);
+    expect(monthSummary(d, '2026-10', '2026-10-15').pendingExpenses).toBe(0);
+    expect(monthSummary(d, '2026-11', '2026-10-15').pendingExpenses).toBe(70);
+    expect(forecast(d, '2026-10-15', '2026-11-14').accounts.hype.end).toBe(30);
+  });
+
+  it('il dettaglio elenca i passaggi con il saldo dopo ciascuno e segnala le voci scadute', () => {
+    const d = data({
+      accounts: [account({ id: 'hype', name: 'Hype', initialBalance: 50 }), account({ id: 'sp', name: 'Satispay', minBalance: 75, topUpFrom: 'hype' })],
+      recurring: [rec({ id: 'netflix', name: 'Netflix', amount: 13, day: 3, accountId: 'hype', startMonth: '2026-10' })],
+      transactions: [tx({ id: 'w', kind: 'entrata', amount: 20, date: '2026-10-20', accountId: 'hype', description: 'Rimborso' })],
+    });
+    const steps = forecast(d, '2026-10-15', '2026-11-14').accounts.hype.steps;
+    expect(steps.map((s) => [s.date, s.label, s.amount, s.balance, s.overdue])).toEqual([
+      ['2026-10-15', 'Netflix', -13, 37, '2026-10-03'],
+      ['2026-10-15', 'Ricarica Satispay (budget 75,00\u00a0€)', -75, -38, undefined],
+      ['2026-10-20', 'Rimborso', 20, -18, undefined],
+      ['2026-11-03', 'Netflix', -13, -31, undefined],
+    ]);
+  });
+});
+
+describe('frequenza e rate', () => {
+  it('una voce trimestrale conta solo ogni 3 mesi e le rate finiscono', async () => {
+    const { recurringDue, endMonthFor, installmentNumber, installmentsTotal, nextDueMonth } = await import('./finance');
+    const assic = rec({ id: 'a', amount: 120, day: 5, startMonth: '2026-11', everyMonths: 3 });
+    expect(['2026-10', '2026-11', '2026-12', '2027-01', '2027-02'].map((m) => recurringDue(assic, m))).toEqual([false, true, false, false, true]);
+    expect(nextDueMonth(assic, '2026-12')).toBe('2027-02');
+
+    const dentista = rec({ id: 'd', amount: 62.5, day: 10, startMonth: '2026-10', endMonth: endMonthFor('2026-10', 1, 4) });
+    expect(dentista.endMonth).toBe('2027-01');
+    expect(installmentsTotal(dentista)).toBe(4);
+    expect(installmentNumber(dentista, '2026-12')).toBe(3);
+    expect(recurringDue(dentista, '2027-01')).toBe(true);
+    expect(recurringDue(dentista, '2027-02')).toBe(false);
+    expect(nextDueMonth(dentista, '2027-02')).toBeUndefined();
+  });
+
+  it('le previsioni seguono la cadenza', () => {
+    const d = data({
+      accounts: [account({ id: 'bank', initialBalance: 1000 })],
+      recurring: [rec({ id: 'bim', amount: 100, day: 20, accountId: 'bank', startMonth: '2026-09', everyMonths: 2 })],
+    });
+    // settembre, novembre, gennaio: tra il 15/10 e il 31/01 cadono 20/11 e 20/01
+    expect(scheduledEvents(d, '2026-10-15', '2027-01-31').map((e) => e.date)).toEqual(['2026-11-20', '2027-01-20']);
+  });
+});
+
+describe('registrazione automatica alla scadenza', () => {
+  it('registra le voci scadute una sola volta e rispetta la spunta tolta', async () => {
+    const { reconcileAutoPay, autoPayId, recurringPayment } = await import('./finance');
+    const base = data({
+      accounts: [account({ id: 'hype' })],
+      recurring: [
+        rec({ id: 'spotify', name: 'Spotify', amount: 11.99, day: 10, accountId: 'hype', startMonth: '2026-08', autoPay: true }),
+        rec({ id: 'garage', name: 'Garage', amount: 70, day: 1, accountId: 'hype', startMonth: '2026-11', autoPay: true }),
+        rec({ id: 'manuale', amount: 5, day: 1, accountId: 'hype', startMonth: '2026-10' }),
+      ],
+    });
+    const d = reconcileAutoPay(base, '2026-10-15', 1);
+    // agosto, settembre e ottobre per Spotify (non oltre 3 mesi indietro); il garage parte a novembre
+    expect(d.transactions.map((t) => t.id).sort()).toEqual(['autopay-spotify-2026-08', 'autopay-spotify-2026-09', 'autopay-spotify-2026-10']);
+    expect(recurringPayment(d.transactions, d.recurring[0], '2026-10')).toMatchObject({ date: '2026-10-10', amount: 11.99, accountId: 'hype' });
+    expect(reconcileAutoPay(d, '2026-10-15', 2)).toBe(d);
+
+    // il garage viene registrato il giorno dell'addebito
+    const nov = reconcileAutoPay(d, '2026-11-01', 3);
+    expect(nov.transactions.some((t) => t.id === autoPayId('garage', '2026-11'))).toBe(true);
+
+    // spunta tolta (eliminazione) → non viene ricreato
+    const untick = { ...d, transactions: d.transactions.filter((t) => t.id !== autoPayId('spotify', '2026-10')), deleted: { [autoPayId('spotify', '2026-10')]: 5 } };
+    expect(reconcileAutoPay(untick, '2026-10-15', 6)).toBe(untick);
+  });
+});
+
+describe('andamento del saldo', () => {
+  it('ricostruisce il saldo giorno per giorno e aggiunge la previsione', async () => {
+    const { balanceSeries } = await import('./finance');
+    const d = data({
+      accounts: [account({ id: 'a', initialBalance: 100 }), account({ id: 'b', initialBalance: 50 })],
+      transactions: [
+        tx({ id: '1', kind: 'entrata', amount: 1000, date: '2026-10-12', accountId: 'a' }),
+        tx({ id: '2', kind: 'uscita', amount: 30, date: '2026-10-13', accountId: 'b' }),
+        tx({ id: '3', kind: 'trasferimento', amount: 500, date: '2026-10-13', accountId: 'a', toAccountId: 'b' }),
+        tx({ id: '4', kind: 'uscita', amount: 200, date: '2026-10-17', accountId: 'a' }),
+      ],
+    });
+    const s = balanceSeries(d, '2026-10-01', '2026-10-14', '2026-10-18');
+    expect(s.map((p) => [p.date.slice(8), p.balance, !!p.projected])).toEqual([
+      ['11', 150, false],
+      ['12', 1150, false],
+      ['13', 1120, false],
+      ['14', 1120, false],
+      ['15', 1120, true],
+      ['16', 1120, true],
+      ['17', 920, true],
+      ['18', 920, true],
+    ]);
+  });
+});
+
+describe('promemoria', () => {
+  it('riassume i pagamenti di domani, le voci scadute e gli avvisi', async () => {
+    const { buildReminder } = await import('./notify');
+    const d = data({
+      accounts: [account({ id: 'hype', name: 'Hype', initialBalance: 50 })],
+      recurring: [
+        rec({ id: 'garage', name: 'Garage', amount: 70, day: 1, accountId: 'hype', startMonth: '2026-11' }),
+        rec({ id: 'spotify', name: 'Spotify', amount: 11.99, day: 10, accountId: 'hype', startMonth: '2026-10' }),
+      ],
+    });
+    const r = buildReminder(d, 15, '2026-10-31')!;
+    expect(r.title).toBe('Attenzione ai conti');
+    expect(r.lines[0]).toMatch(/^Da registrare: Spotify −11,99/);
+    expect(r.lines[1]).toMatch(/^Domani: Garage −70,00/);
+    expect(r.lines[2]).toMatch(/^⚠️ Hype: mancano/);
+    expect(buildReminder(data({ accounts: [account({ id: 'x', initialBalance: 10 })] }), 15, '2026-10-31')).toBeNull();
+  });
+});

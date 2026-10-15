@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   ACCOUNT_TYPES,
+  recurringDue,
   isFuture,
   isVisible,
   accountBalance,
@@ -24,6 +25,7 @@ import type { Tab } from '../App';
 import { TransactionForm, TransactionList } from './Transactions';
 import { Alerts, shortfallText, useForecast, WarnIcon } from './Alerts';
 import { SankeyCard } from './Sankey';
+import { BalanceChart } from './BalanceChart';
 import { Empty, Progress } from './ui';
 
 export function Dashboard({ store, month, payday, goTo }: { store: Store; month: string; payday: number; goTo: (t: Tab) => void }) {
@@ -42,7 +44,7 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   const trendMax = Math.max(1, ...trend.flatMap((t) => [t.income, t.expenses]));
 
   const due = data.recurring
-    .filter((r) => r.active && !recurringPayment(data.transactions, r, month))
+    .filter((r) => recurringDue(r, month) && !recurringPayment(data.transactions, r, month))
     .sort((a, b) => a.day - b.day);
   const planned = sortPlanned(data.planned.filter((p) => !p.boughtDate)).slice(0, 3);
   const recent = transactionsIn(data.transactions, month)
@@ -130,6 +132,8 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
       <SankeyCard data={data} month={month} />
 
       <div className="grid-2">
+        <BalanceChart data={data} payday={payday} />
+
         <section className="card span-2">
           <div className="card-head">
             <h3>{isCurrent ? 'Saldo dei conti' : 'Saldo dei conti a fine mese'}</h3>

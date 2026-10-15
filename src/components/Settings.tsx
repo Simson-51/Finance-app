@@ -3,6 +3,7 @@ import { emptyData, parseBackup, toCsv, today } from '../finance';
 import type { Store } from '../store';
 import type { Sync } from '../useSync';
 import { Field } from './ui';
+import { enableNotifications, needsHomeScreen, notificationsEnabled, notificationsSupported, setNotificationsPref } from '../notify';
 
 function download(name: string, content: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -139,6 +140,62 @@ function SyncSection({ sync }: { sync: Sync }) {
   );
 }
 
+function NotificationsSection() {
+  const [on, setOn] = useState(notificationsEnabled);
+  const [msg, setMsg] = useState('');
+  const supported = notificationsSupported();
+  return (
+    <section className="card settings">
+      <h3>Promemoria</h3>
+      <p className="muted small">
+        Quando apri l'app ricevi una notifica con i pagamenti di domani, le voci mensili scadute da registrare e gli avvisi ⚠️ sui conti. Ogni
+        promemoria arriva al massimo una volta al giorno. Ad app chiusa le notifiche non arrivano, perché l'app non usa un server.
+      </p>
+      {!supported || needsHomeScreen() ? (
+        <p className="note">
+          📱 Su iPhone le notifiche funzionano solo con l'app aggiunta alla schermata Home: in Safari tocca <strong>Condividi</strong> →{' '}
+          <strong>Aggiungi alla schermata Home</strong>, poi apri l'app da lì e torna qui.
+        </p>
+      ) : on ? (
+        <div className="button-row">
+          <span className="sync-status ok">
+            <span className="sync-dot" aria-hidden /> Attivi
+          </span>
+          <button
+            className="btn ghost"
+            onClick={() => {
+              setNotificationsPref(false);
+              setOn(false);
+            }}
+          >
+            Disattiva
+          </button>
+        </div>
+      ) : (
+        <div className="button-row">
+          <button
+            className="btn primary"
+            onClick={async () => {
+              const r = await enableNotifications();
+              setOn(r === 'granted');
+              setMsg(
+                r === 'denied'
+                  ? 'Permesso negato: puoi riattivarlo dalle impostazioni del telefono (Notifiche → Le mie finanze).'
+                  : r === 'unsupported'
+                    ? 'Questo browser non supporta le notifiche.'
+                    : '',
+              );
+            }}
+          >
+            Attiva promemoria
+          </button>
+        </div>
+      )}
+      {msg && <p className="error small">{msg}</p>}
+    </section>
+  );
+}
+
 export function SettingsView({
   store,
   sync,
@@ -181,6 +238,8 @@ export function SettingsView({
       </div>
 
       <SyncSection sync={sync} />
+
+      <NotificationsSection />
 
       <section className="card settings">
         <h3>Stipendio</h3>
