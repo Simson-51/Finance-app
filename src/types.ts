@@ -65,6 +65,12 @@ export interface Recurring extends Synced {
   active: boolean;
   /** Primo mese (YYYY-MM) in cui la voce è dovuta: i mesi precedenti non la contano. */
   startMonth?: string;
+  /** Ogni quanti mesi si ripete (1 = ogni mese, 3 = trimestrale, 12 = annuale). */
+  everyMonths?: number;
+  /** Ultimo mese (YYYY-MM) in cui è dovuta, per le rate; assente = senza fine. */
+  endMonth?: string;
+  /** Registra da sola il pagamento/incasso alla scadenza, senza spuntarla. */
+  autoPay?: boolean;
   /** Conto su cui registrare il movimento; se assente si usa il primo conto. */
   accountId?: string;
 }

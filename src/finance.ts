@@ -118,8 +118,75 @@ export function defaultStartMonth(day: number, created = today()): string {
 export const recurringStart = (r: Recurring) =>
   r.startMonth ?? (r.updatedAt > 0 ? defaultStartMonth(r.day, today(new Date(r.updatedAt))) : '0000-01');
 
-/** La voce mensile conta nel mese indicato (attiva e già iniziata). */
-export const recurringDue = (r: Recurring, month: string) => r.active && month >= recurringStart(r);
+/** Mesi tra due mesi YYYY-MM (b − a). */
+export const monthsBetween = (a: string, b: string) => {
+  const [ya, ma] = a.split('-').map(Number);
+  const [yb, mb] = b.split('-').map(Number);
+  return (yb - ya) * 12 + (mb - ma);
+};
+
+export const FREQUENCIES = [
+  { months: 1, label: 'Ogni mese' },
+  { months: 2, label: 'Ogni 2 mesi' },
+  { months: 3, label: 'Ogni 3 mesi' },
+  { months: 6, label: 'Ogni 6 mesi' },
+  { months: 12, label: 'Ogni anno' },
+];
+
+export const recurringEvery = (r: Pick<Recurring, 'everyMonths'>) => Math.max(1, r.everyMonths ?? 1);
+
+/** La voce conta nel mese indicato: attiva, già iniziata, non finita e nel mese giusto della sua cadenza. */
+export function recurringDue(r: Recurring, month: string): boolean {
+  if (!r.active) return false;
+  const start = recurringStart(r);
+  if (month < start || (r.endMonth && month > r.endMonth)) return false;
+  return monthsBetween(start, month) % recurringEvery(r) === 0;
+}
+
+/** Ultimo mese di una voce che termina dopo `count` addebiti. */
+export const endMonthFor = (start: string, every: number, count: number) => addMonths(start, (count - 1) * every);
+
+/** Numero di addebiti totali di una voce con fine (rate), altrimenti null. */
+export const installmentsTotal = (r: Recurring) =>
+  r.endMonth ? Math.floor(monthsBetween(recurringStart(r), r.endMonth) / recurringEvery(r)) + 1 : null;
+
+/** Quale rata cade nel mese (1 = la prima), per le voci con fine. */
+export const installmentNumber = (r: Recurring, month: string) =>
+  r.endMonth ? Math.floor(monthsBetween(recurringStart(r), month) / recurringEvery(r)) + 1 : null;
+
+/** Prossimo mese, da `month` compreso, in cui la voce è dovuta (entro due anni). */
+export function nextDueMonth(r: Recurring, month: string): string | undefined {
+  for (let m = month, i = 0; i < 25; i++, m = addMonths(m, 1)) if (recurringDue(r, m)) return m;
+  return undefined;
+}
+
+/** Id fisso del pagamento registrato in automatico: due dispositivi producono lo stesso record. */
+export const autoPayId = (recurringId: string, month: string) => `autopay-${recurringId}-${month}`;
+
+/**
+ * Registra da solo, alla scadenza, il pagamento/incasso delle voci con registrazione automatica
+ * (al massimo per gli ultimi 3 mesi). Se l'utente ha tolto la spunta, il pagamento non viene
+ * ricreato. Restituisce lo stesso oggetto se non c'è nulla da cambiare.
+ */
+export function reconcileAutoPay(data: Data, day = today(), now = Date.now()): Data {
+  const added: Transaction[] = [];
+  const current = monthOf(day);
+  const fallback = data.accounts.find((a) => !a.archived) ?? data.accounts[0];
+  for (const r of data.recurring) {
+    if (!r.autoPay || !r.active) continue;
+    const start = recurringStart(r);
+    const from = start > addMonths(current, -3) ? start : addMonths(current, -3);
+    for (let month = from; month <= current; month = addMonths(month, 1)) {
+      const date = recurringDate(r, month);
+      if (!recurringDue(r, month) || date > day || recurringPayment(data.transactions, r, month)) continue;
+      const id = autoPayId(r.id, month);
+      if (data.deleted[id]) continue;
+      const account = data.accounts.find((a) => a.id === r.accountId && !a.archived) ?? fallback;
+      added.push({ id, kind: r.kind, amount: r.amount, date, category: r.category, description: r.name, accountId: account.id, recurringId: r.id, updatedAt: now });
+    }
+  }
+  return added.length ? { ...data, transactions: [...data.transactions, ...added] } : data;
+}
 
 /** Il movimento che registra la voce mensile in quel mese, se esiste. */
 export const recurringPayment = (txs: Transaction[], r: Recurring, month: string) =>
@@ -577,4 +644,57 @@ export function monthFlows(data: Data, month: string, includeFuture = false, asO
     fromSavings: round(Math.max(0, totalOut - totalIn)),
     total: round(Math.max(totalIn, totalOut)),
   };
+}
+
+export interface BalancePoint {
+  date: string;
+  balance: number;
+  /** true per i giorni futuri (saldo previsto). */
+  projected?: boolean;
+}
+
+/** Giorno successivo a una data YYYY-MM-DD. */
+export const dayAfter = (date: string) => {
+  const [y, m, d] = date.split('-').map(Number);
+  return today(new Date(y, m - 1, d + 1));
+};
+
+/**
+ * Saldo totale di tutti i conti giorno per giorno da `from` a oggi, seguito dal saldo previsto
+ * fino a `until` (movimenti previsti e voci mensili da registrare). I trasferimenti tra conti
+ * non cambiano il totale. La storia parte al più presto dal giorno prima del primo movimento.
+ */
+export function balanceSeries(data: Data, from: string, day = today(), until = day): BalancePoint[] {
+  const delta = new Map<string, number>();
+  const add = (date: string, v: number) => delta.set(date, (delta.get(date) ?? 0) + v);
+  let start = data.accounts.reduce((s, a) => s + a.initialBalance, 0);
+  for (const t of data.transactions) {
+    if (t.kind === 'trasferimento' || t.date > day) continue;
+    const v = t.kind === 'entrata' ? t.amount : -t.amount;
+    if (t.date < from) start += v;
+    else add(t.date, v);
+  }
+  const first = data.transactions.filter((t) => t.kind !== 'trasferimento').reduce((m, t) => (t.date < m ? t.date : m), day);
+  const begin = from > dayBefore(first) ? from : dayBefore(first);
+
+  const points: BalancePoint[] = [];
+  let bal = start;
+  for (let d = begin; d <= day; d = dayAfter(d)) {
+    bal += delta.get(d) ?? 0;
+    points.push({ date: d, balance: round(bal) });
+  }
+
+  const future = new Map<string, number>();
+  for (const e of scheduledEvents(data, day, until)) {
+    if (e.kind !== 'trasferimento') future.set(e.date, (future.get(e.date) ?? 0) + (e.kind === 'entrata' ? e.amount : -e.amount));
+  }
+  // le voci scadute contano come dovute oggi: il punto di oggi le include nella parte prevista
+  const dueToday = future.get(day) ?? 0;
+  if (dueToday) points.push({ date: day, balance: round(bal + dueToday), projected: true });
+  bal += dueToday;
+  for (let d = dayAfter(day); d <= until; d = dayAfter(d)) {
+    bal += future.get(d) ?? 0;
+    points.push({ date: d, balance: round(bal), projected: true });
+  }
+  return points;
 }
