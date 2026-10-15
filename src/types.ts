@@ -63,6 +63,8 @@ export interface Recurring extends Synced {
   /** Giorno del mese previsto (1-31). */
   day: number;
   active: boolean;
+  /** Primo mese (YYYY-MM) in cui la voce è dovuta: i mesi precedenti non la contano. */
+  startMonth?: string;
   /** Conto su cui registrare il movimento; se assente si usa il primo conto. */
   accountId?: string;
 }

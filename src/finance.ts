@@ -105,6 +105,22 @@ export const sum = (list: { amount: number }[]) => round(list.reduce((s, x) => s
 
 export const transactionsIn = (txs: Transaction[], month: string) => txs.filter((t) => monthOf(t.date) === month);
 
+/**
+ * Primo mese in cui una voce mensile è dovuta: quello del primo addebito che cade dopo la
+ * creazione. Una spesa del giorno 1 creata il 15 ottobre parte da novembre.
+ */
+export function defaultStartMonth(day: number, created = today()): string {
+  const month = monthOf(created);
+  return Number(created.slice(8, 10)) > Math.min(day, daysInMonth(month)) ? addMonths(month, 1) : month;
+}
+
+/** Primo mese della voce; per le voci create prima di questa opzione si deduce dall'ultima modifica. */
+export const recurringStart = (r: Recurring) =>
+  r.startMonth ?? (r.updatedAt > 0 ? defaultStartMonth(r.day, today(new Date(r.updatedAt))) : '0000-01');
+
+/** La voce mensile conta nel mese indicato (attiva e già iniziata). */
+export const recurringDue = (r: Recurring, month: string) => r.active && month >= recurringStart(r);
+
 /** Il movimento che registra la voce mensile in quel mese, se esiste. */
 export const recurringPayment = (txs: Transaction[], r: Recurring, month: string) =>
   txs.find((t) => t.recurringId === r.id && monthOf(t.date) === month);
@@ -130,7 +146,7 @@ export function monthSummary(data: Data, month: string, asOf = today()): MonthSu
   const future = all.filter((t) => t.date > asOf);
   const income = sum(txs.filter((t) => t.kind === 'entrata'));
   const expenses = sum(txs.filter((t) => t.kind === 'uscita'));
-  const active = data.recurring.filter((r) => r.active);
+  const active = data.recurring.filter((r) => recurringDue(r, month));
   const pending = active.filter((r) => !recurringPayment(data.transactions, r, month));
   const pendingIncome = round(sum(pending.filter((r) => r.kind === 'entrata')) + sum(future.filter((t) => t.kind === 'entrata')));
   const pendingExpenses = round(sum(pending.filter((r) => r.kind === 'uscita')) + sum(future.filter((t) => t.kind === 'uscita')));
@@ -235,6 +251,10 @@ export interface ScheduledEvent {
   accountId: string;
   toAccountId?: string;
   label: string;
+  /** Voce mensile non ancora segnata come pagata/incassata. */
+  recurring?: boolean;
+  /** Data originale di una voce mensile scaduta e non registrata (contata come dovuta oggi). */
+  overdue?: string;
 }
 
 const endOfMonth = (month: string) => `${month}-${pad(daysInMonth(month))}`;
@@ -269,11 +289,19 @@ export function scheduledEvents(data: Data, from = today(), to = forecastHorizon
   const fallback = data.accounts.find((a) => !a.archived) ?? data.accounts[0];
   for (let month = monthOf(from); month <= monthOf(to); month = addMonths(month, 1)) {
     for (const r of data.recurring) {
-      if (!r.active || recurringPayment(data.transactions, r, month)) continue;
+      if (!recurringDue(r, month) || recurringPayment(data.transactions, r, month)) continue;
       const due = recurringDate(r, month);
       if (due > to) continue;
       const account = data.accounts.find((a) => a.id === r.accountId && !a.archived) ?? fallback;
-      events.push({ date: due < from ? from : due, kind: r.kind, amount: r.amount, accountId: account.id, label: r.name });
+      events.push({
+        date: due < from ? from : due,
+        kind: r.kind,
+        amount: r.amount,
+        accountId: account.id,
+        label: r.name,
+        recurring: true,
+        overdue: due < from ? due : undefined,
+      });
     }
   }
   return events.sort((a, b) => a.date.localeCompare(b.date));
@@ -290,6 +318,19 @@ export interface AccountForecast {
   shortfall: number;
   /** Primo giorno in cui i soldi non bastano. */
   shortDate?: string;
+  /** Movimenti previsti che toccano il conto, con il saldo dopo ciascuno. */
+  steps: ForecastStep[];
+}
+
+export interface ForecastStep {
+  date: string;
+  label: string;
+  /** Effetto sul saldo del conto (+ entra, − esce). */
+  amount: number;
+  balance: number;
+  kind: 'entrata' | 'uscita' | 'trasferimento' | 'ricarica';
+  recurring?: boolean;
+  overdue?: string;
 }
 
 export interface Forecast {
@@ -307,28 +348,36 @@ export function forecast(data: Data, from = today(), to = forecastHorizon(from))
   const result: Record<string, AccountForecast> = {};
   for (const a of data.accounts) {
     bal[a.id] = accountBalance(data, a, from);
-    result[a.id] = { current: bal[a.id], end: bal[a.id], min: bal[a.id], shortfall: 0 };
+    result[a.id] = { current: bal[a.id], end: bal[a.id], min: bal[a.id], shortfall: 0, steps: [] };
   }
   const topUps: Forecast['topUps'] = [];
   const events = scheduledEvents(data, from, to);
   const days = [...new Set([from, ...events.map((e) => e.date)])].sort();
 
+  const name = (id?: string) => accountName(data.accounts, id);
+  const move = (id: string | undefined, amount: number, step: Omit<ForecastStep, 'amount' | 'balance'>) => {
+    if (!id || !(id in bal)) return;
+    bal[id] = round(bal[id] + amount);
+    result[id].steps.push({ ...step, amount, balance: bal[id] });
+  };
+
   for (const day of days) {
     for (const e of events) {
       if (e.date !== day) continue;
+      const base = { date: day, kind: e.kind, recurring: e.recurring, overdue: e.overdue };
       if (e.kind === 'trasferimento') {
-        if (e.accountId in bal) bal[e.accountId] -= e.amount;
-        if (e.toAccountId && e.toAccountId in bal) bal[e.toAccountId] += e.amount;
-      } else if (e.accountId in bal) {
-        bal[e.accountId] += e.kind === 'entrata' ? e.amount : -e.amount;
+        move(e.accountId, -e.amount, { ...base, label: `${e.label} → ${name(e.toAccountId)}` });
+        move(e.toAccountId, e.amount, { ...base, label: `${e.label} ← ${name(e.accountId)}` });
+      } else {
+        move(e.accountId, e.kind === 'entrata' ? e.amount : -e.amount, { ...base, label: e.label });
       }
     }
     for (const a of data.accounts) {
       const src = topUpSource(data.accounts, a);
       const deficit = src ? round(a.minBalance! - bal[a.id]) : 0;
       if (!src || deficit <= 0) continue;
-      bal[a.id] += deficit;
-      bal[src.id] -= deficit;
+      move(a.id, deficit, { date: day, kind: 'ricarica', label: `Ricarica da ${src.name} (budget ${euro(a.minBalance!)})` });
+      move(src.id, -deficit, { date: day, kind: 'ricarica', label: `Ricarica ${a.name} (budget ${euro(a.minBalance!)})` });
       if (day === from && !a.autoTopUp) topUps.push({ accountId: a.id, fromId: src.id, amount: deficit });
     }
     for (const a of data.accounts) {

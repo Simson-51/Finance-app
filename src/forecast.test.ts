@@ -219,3 +219,42 @@ describe('flussi del mese (Sankey)', () => {
     expect(f.expenses.at(-1)!.amount).toBe(94 + 93 + 92);
   });
 });
+
+describe('primo addebito delle voci mensili', () => {
+  it('una spesa del giorno 1 creata il 15 parte dal mese dopo', async () => {
+    const { defaultStartMonth, recurringStart } = await import('./finance');
+    expect(defaultStartMonth(1, '2026-10-15')).toBe('2026-11');
+    expect(defaultStartMonth(15, '2026-10-15')).toBe('2026-10');
+    expect(defaultStartMonth(31, '2026-02-28')).toBe('2026-02');
+    // voce creata prima dell'opzione: si deduce dall'ultima modifica
+    expect(recurringStart(rec({ id: 'g', amount: 70, day: 1, updatedAt: new Date('2026-10-15T09:00:00').getTime() }))).toBe('2026-11');
+    expect(recurringStart(rec({ id: 'g', amount: 70, day: 1, startMonth: '2026-10' }))).toBe('2026-10');
+  });
+
+  it('il garage aggiunto oggi non viene contato come scaduto a ottobre', () => {
+    const d = data({
+      accounts: [account({ id: 'hype', initialBalance: 100 })],
+      recurring: [rec({ id: 'garage', amount: 70, day: 1, accountId: 'hype', startMonth: '2026-11' })],
+    });
+    const events = scheduledEvents(d, '2026-10-15', '2026-11-14');
+    expect(events.map((e) => e.date)).toEqual(['2026-11-01']);
+    expect(monthSummary(d, '2026-10', '2026-10-15').pendingExpenses).toBe(0);
+    expect(monthSummary(d, '2026-11', '2026-10-15').pendingExpenses).toBe(70);
+    expect(forecast(d, '2026-10-15', '2026-11-14').accounts.hype.end).toBe(30);
+  });
+
+  it('il dettaglio elenca i passaggi con il saldo dopo ciascuno e segnala le voci scadute', () => {
+    const d = data({
+      accounts: [account({ id: 'hype', name: 'Hype', initialBalance: 50 }), account({ id: 'sp', name: 'Satispay', minBalance: 75, topUpFrom: 'hype' })],
+      recurring: [rec({ id: 'netflix', name: 'Netflix', amount: 13, day: 3, accountId: 'hype', startMonth: '2026-10' })],
+      transactions: [tx({ id: 'w', kind: 'entrata', amount: 20, date: '2026-10-20', accountId: 'hype', description: 'Rimborso' })],
+    });
+    const steps = forecast(d, '2026-10-15', '2026-11-14').accounts.hype.steps;
+    expect(steps.map((s) => [s.date, s.label, s.amount, s.balance, s.overdue])).toEqual([
+      ['2026-10-15', 'Netflix', -13, 37, '2026-10-03'],
+      ['2026-10-15', 'Ricarica Satispay (budget 75,00\u00a0€)', -75, -38, undefined],
+      ['2026-10-20', 'Rimborso', 20, -18, undefined],
+      ['2026-11-03', 'Netflix', -13, -31, undefined],
+    ]);
+  });
+});

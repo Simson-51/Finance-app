@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   ACCOUNT_TYPES,
+  recurringDue,
   isFuture,
   isVisible,
   accountBalance,
@@ -42,7 +43,7 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   const trendMax = Math.max(1, ...trend.flatMap((t) => [t.income, t.expenses]));
 
   const due = data.recurring
-    .filter((r) => r.active && !recurringPayment(data.transactions, r, month))
+    .filter((r) => recurringDue(r, month) && !recurringPayment(data.transactions, r, month))
     .sort((a, b) => a.day - b.day);
   const planned = sortPlanned(data.planned.filter((p) => !p.boughtDate)).slice(0, 3);
   const recent = transactionsIn(data.transactions, month)

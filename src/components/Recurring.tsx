@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { CATEGORIES, euro, parseAmount, recurringDate, recurringPayment, sum, formatDate, uid } from '../finance';
+import { addMonths, CATEGORIES, defaultStartMonth, euro, formatMonth, monthOf, parseAmount, recurringDate, recurringDue, recurringPayment, recurringStart, sum, formatDate, today, uid } from '../finance';
 import type { Store } from '../store';
 import type { Account, Kind, Recurring } from '../types';
 import { AccountSelect } from './Accounts';
@@ -24,6 +24,12 @@ function RecurringForm({
   const [category, setCategory] = useState(initial?.category ?? 'Bollette');
   const [day, setDay] = useState(String(initial?.day ?? 1));
   const [active, setActive] = useState(initial?.active ?? true);
+  // per una voce nuova il primo mese segue il giorno scelto, finché non lo si cambia a mano
+  const [startMonth, setStartMonth] = useState(initial ? recurringStart(initial) : defaultStartMonth(1));
+  const [startTouched, setStartTouched] = useState(!!initial);
+  const current = monthOf(today());
+  const months = Array.from({ length: 15 }, (_, i) => addMonths(current, i - 2));
+  if (!months.includes(startMonth)) months.unshift(startMonth);
   const [accountId, setAccountId] = useState(
     accounts.find((a) => a.id === initial?.accountId)?.id ?? accounts.find((a) => !a.archived)?.id ?? accounts[0].id,
   );
@@ -41,7 +47,7 @@ function RecurringForm({
     if (!name.trim()) return setError('Inserisci un nome');
     if (!(value > 0)) return setError('Inserisci un importo maggiore di zero');
     if (!Number.isInteger(d) || d < 1 || d > 31) return setError('Il giorno deve essere tra 1 e 31');
-    onSave({ id: initial?.id ?? uid(), kind, name: name.trim(), amount: value, category, day: d, active, accountId });
+    onSave({ id: initial?.id ?? uid(), kind, name: name.trim(), amount: value, category, day: d, active, accountId, startMonth });
     onClose();
   };
 
@@ -63,9 +69,45 @@ function RecurringForm({
             {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={amount} onChange={(e) => setAmount(e.target.value)} />}
           </Field>
           <Field label="Giorno del mese">
-            {(id) => <input id={id} type="number" min={1} max={31} value={day} onChange={(e) => setDay(e.target.value)} />}
+            {(id) => (
+              <input
+                id={id}
+                type="number"
+                min={1}
+                max={31}
+                value={day}
+                onChange={(e) => {
+                  setDay(e.target.value);
+                  const d = Number(e.target.value);
+                  if (!startTouched && d >= 1 && d <= 31) setStartMonth(defaultStartMonth(d));
+                }}
+              />
+            )}
           </Field>
         </div>
+        <Field
+          label="Primo addebito"
+          hint={`I mesi precedenti non vengono contati. Primo ${kind === 'uscita' ? 'pagamento' : 'incasso'}: ${
+            Number(day) >= 1 && Number(day) <= 31 ? formatDate(recurringDate({ day: Number(day) } as Recurring, startMonth)) : '—'
+          }.`}
+        >
+          {(id) => (
+            <select
+              id={id}
+              value={startMonth}
+              onChange={(e) => {
+                setStartMonth(e.target.value);
+                setStartTouched(true);
+              }}
+            >
+              {months.map((m) => (
+                <option key={m} value={m}>
+                  {formatMonth(m)}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
         <Field label="Categoria">
           {(id) => (
             <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
@@ -113,8 +155,8 @@ export function RecurringView({ store, month }: { store: Store; month: string })
   const [editing, setEditing] = useState<Recurring | 'new' | null>(null);
   const { recurring, transactions } = store.data;
   const sorted = [...recurring].sort((a, b) => Number(b.active) - Number(a.active) || a.day - b.day || a.name.localeCompare(b.name));
-  const activeExpenses = recurring.filter((r) => r.active && r.kind === 'uscita');
-  const activeIncome = recurring.filter((r) => r.active && r.kind === 'entrata');
+  const activeExpenses = recurring.filter((r) => recurringDue(r, month) && r.kind === 'uscita');
+  const activeIncome = recurring.filter((r) => recurringDue(r, month) && r.kind === 'entrata');
   const paid = activeExpenses.filter((r) => recurringPayment(transactions, r, month));
   const totalExpenses = sum(activeExpenses);
   const paidAmount = sum(paid);
@@ -128,12 +170,14 @@ export function RecurringView({ store, month }: { store: Store; month: string })
         <ul className="list card">
           {list.map((r) => {
             const payment = recurringPayment(transactions, r, month);
+            const due = recurringDue(r, month);
+            const notStarted = r.active && !due;
             return (
-              <li key={r.id} className={r.active ? '' : 'inactive'}>
+              <li key={r.id} className={due ? '' : 'inactive'}>
                 <div className="list-item">
                   <button
                     className={`tick ${payment ? 'done' : ''}`}
-                    disabled={!r.active && !payment}
+                    disabled={!due && !payment}
                     aria-label={payment ? `Annulla registrazione di ${r.name}` : `Segna ${r.name} come ${kind === 'uscita' ? 'pagata' : 'incassata'}`}
                     title={payment ? 'Registrata questo mese (clicca per annullare)' : kind === 'uscita' ? 'Segna come pagata' : 'Segna come incassata'}
                     onClick={() => store.toggleRecurringPaid(r, month)}
@@ -143,7 +187,12 @@ export function RecurringView({ store, month }: { store: Store; month: string })
                   <button className="list-main as-button" onClick={() => setEditing(r)}>
                     <span className="list-title">{r.name}</span>
                     <span className="list-sub">
-                      {r.category} · {r.active ? `il ${formatDate(recurringDate(r, month)).replace(/ \d{4}$/, '')}` : 'disattivata'}
+                      {r.category} ·{' '}
+                      {notStarted
+                        ? `inizia a ${formatMonth(recurringStart(r)).toLowerCase()}`
+                        : r.active
+                          ? `il ${formatDate(recurringDate(r, month)).replace(/ \d{4}$/, '')}`
+                          : 'disattivata'}
                       {payment && (kind === 'uscita' ? ' · pagata' : ' · incassata')}
                     </span>
                   </button>
