@@ -54,6 +54,7 @@ export function buildReminder(data: Data, payday: number, day = today()): Remind
     const f = fc.accounts[a.id];
     if (f?.shortfall > 0) lines.push(`⚠️ ${accountName(data.accounts, a.id)}: mancano ${euro(f.shortfall)} prima dello stipendio`);
   }
+  if (fc.unassigned.shortfall > 0) lines.push(`⚠️ Spese sicure senza conto: mancano ${euro(fc.unassigned.shortfall)} prima dello stipendio`);
   if (!lines.length) return null;
   const title = lines.some((l) => l.startsWith('⚠️')) ? 'Attenzione ai conti' : 'Promemoria pagamenti';
   return { title, lines };

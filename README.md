@@ -12,6 +12,7 @@ App web (installabile anche su telefono e computer come PWA) per gestire le fina
 - **Andamento del saldo**: grafico del saldo totale giorno per giorno (1, 3, 6 o 12 mesi) con la previsione tratteggiata fino al prossimo stipendio.
 - **Promemoria**: all'apertura dell'app una notifica ricorda i pagamenti di domani, le voci scadute da registrare e gli avvisi sui conti (su iPhone serve l'app aggiunta alla schermata Home).
 - **Acquisti in programma**: annota cosa vuoi comprare, il costo, la priorità e la data obiettivo; l'app calcola quanto mettere da parte ogni mese. Quando compri, l'uscita viene registrata.
+- **Spese sicure**: debiti o acquisti già fatti ma non ancora addebitati, anche senza conto o data decisi. Contano negli impegni, nel **disponibile libero** (saldo − spese sicure) e negli avvisi; con "Pagato" diventano un'uscita.
 - **Riepilogo mensile**: entrate, uscite, saldo, previsione di fine mese (con le voci fisse ancora da registrare), spese per categoria e andamento degli ultimi 6 mesi.
 - **Backup**: esporta/importa i dati in JSON ed esporta i movimenti in CSV (apribile con Excel).
 - Tema chiaro/scuro, funziona offline.

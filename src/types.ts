@@ -85,11 +85,21 @@ export interface Planned extends Synced {
   priority: Priority;
   /** Categoria usata per l'uscita quando l'acquisto viene fatto. */
   category: string;
-  /** YYYY-MM-DD, facoltativa */
+  /**
+   * YYYY-MM-DD, facoltativa. Per i desideri è la data obiettivo; per le spese sicure è il
+   * giorno previsto dell'addebito.
+   */
   targetDate?: string;
   notes: string;
   /** YYYY-MM-DD in cui è stato acquistato; assente se ancora da fare. */
   boughtDate?: string;
+  /**
+   * Spesa sicura: debito o acquisto già fatto ma non ancora addebitato. Conta negli impegni,
+   * nel disponibile libero e negli avvisi.
+   */
+  committed?: boolean;
+  /** Conto da cui uscirà la spesa sicura; assente se non è ancora deciso. */
+  accountId?: string;
 }
 
 export interface Data {

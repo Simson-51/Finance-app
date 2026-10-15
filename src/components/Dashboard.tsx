@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   ACCOUNT_TYPES,
+  commitments,
   recurringDue,
   isFuture,
   isVisible,
@@ -34,6 +35,9 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   const [editing, setEditing] = useState<Transaction | null>(null);
   const s = monthSummary(data, month);
   const fc = useForecast(data, payday);
+  const committed = commitments(data);
+  const balanceToday = totalBalance(data, today());
+  const freeToday = Math.round((balanceToday - committed.total) * 100) / 100;
   const isCurrent = month === monthOf(today());
   const lastDay = `${month}-31`;
   const balanceDate = isCurrent ? today() : lastDay;
@@ -46,7 +50,7 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   const due = data.recurring
     .filter((r) => recurringDue(r, month) && !recurringPayment(data.transactions, r, month))
     .sort((a, b) => a.day - b.day);
-  const planned = sortPlanned(data.planned.filter((p) => !p.boughtDate)).slice(0, 3);
+  const planned = sortPlanned(data.planned.filter((p) => !p.boughtDate && !p.committed)).slice(0, 3);
   const recent = transactionsIn(data.transactions, month)
     .filter((t) => isVisible(t) && !isFuture(t))
     .sort((a, b) => b.date.localeCompare(a.date))
@@ -114,6 +118,21 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
           <strong>{euro(balanceAtEnd)}</strong>
         </div>
       </div>
+
+      {committed.total > 0 && (
+        <button className="card free-card" onClick={() => goTo('acquisti')}>
+          <span className="free-main">
+            <span className="muted">Disponibile libero oggi</span>
+            <strong className={`big ${freeToday < 0 ? 'amount uscita' : 'amount entrata'}`}>{euro(freeToday)}</strong>
+          </span>
+          <span className="free-calc small muted">
+            Saldo {euro(balanceToday)} − spese sicure {euro(committed.total)}
+          </span>
+          <span className="chevron" aria-hidden>
+            ›
+          </span>
+        </button>
+      )}
 
       {(s.pendingExpenses > 0 || s.pendingIncome > 0) && (
         <div className="card forecast">

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { accountBalance, emptyData, forecast, monthSummary, reconcileTopUps, scheduledEvents, topUpId } from './finance';
-import type { Account, Data, Recurring, Transaction } from './types';
+import type { Account, Data, Planned, Recurring, Transaction } from './types';
 
 const TODAY = '2026-10-14';
 
@@ -354,5 +354,57 @@ describe('promemoria', () => {
     expect(r.lines[1]).toMatch(/^Domani: Garage −70,00/);
     expect(r.lines[2]).toMatch(/^⚠️ Hype: mancano/);
     expect(buildReminder(data({ accounts: [account({ id: 'x', initialBalance: 10 })] }), 15, '2026-10-31')).toBeNull();
+  });
+});
+
+describe('spese sicure', () => {
+  const plan = (p: Partial<Planned> & Pick<Planned, 'id' | 'name' | 'cost'>): Planned => ({
+    saved: 0,
+    priority: 'media',
+    category: 'Altro',
+    notes: '',
+    updatedAt: 0,
+    committed: true,
+    ...p,
+  });
+  const base = (planned: Planned[], hype = 600) =>
+    data({ accounts: [account({ id: 'hype', name: 'Hype', initialBalance: hype }), account({ id: 'amz', name: 'Carta Amazon', initialBalance: 100 })], planned });
+
+  it('calcola impegnati per conto e senza conto, escludendo desideri e già pagate', async () => {
+    const { commitments } = await import('./finance');
+    const c = commitments(
+      base([
+        plan({ id: 'debito', name: 'Debito con i miei', cost: 500 }),
+        plan({ id: 'switch', name: 'Switch 2', cost: 469.99, accountId: 'amz' }),
+        plan({ id: 'pagata', name: 'Vecchia', cost: 50, accountId: 'hype', boughtDate: '2026-10-01' }),
+        plan({ id: 'desiderio', name: 'Bici', cost: 300, committed: undefined }),
+      ]),
+    );
+    expect(c.total).toBe(969.99);
+    expect(c.byAccount).toEqual({ amz: 469.99 });
+    expect(c.unassignedTotal).toBe(500);
+  });
+
+  it('con un conto contano da subito se senza data, oppure alla data prevista', () => {
+    const d = base([
+      plan({ id: 'switch', name: 'Switch 2', cost: 469.99, accountId: 'amz' }),
+      plan({ id: 'cuffie', name: 'Cuffie', cost: 80, accountId: 'hype', targetDate: '2026-10-25' }),
+      plan({ id: 'dopo', name: 'Dopo lo stipendio', cost: 80, accountId: 'hype', targetDate: '2026-11-20' }),
+    ]);
+    const fc = forecast(d, '2026-10-15', '2026-11-14');
+    expect(fc.accounts.amz.shortfall).toBe(369.99);
+    expect(fc.accounts.amz.steps[0]).toMatchObject({ date: '2026-10-15', committed: true, undated: true });
+    expect(fc.accounts.hype.steps.map((s) => [s.date, s.label])).toEqual([['2026-10-25', 'Cuffie']]);
+    expect(monthSummary(d, '2026-10', '2026-10-15').pendingExpenses).toBe(80);
+  });
+
+  it('quelle senza conto avvisano quando quello che resta su tutti i conti non basta', () => {
+    const ok = forecast(base([plan({ id: 'debito', name: 'Debito', cost: 500 })]), '2026-10-15', '2026-11-14');
+    expect(ok.unassigned).toMatchObject({ total: 500, available: 700, shortfall: 0 });
+    const short = forecast(base([plan({ id: 'debito', name: 'Debito', cost: 500 })], 300), '2026-10-15', '2026-11-14');
+    expect(short.unassigned).toMatchObject({ total: 500, available: 400, shortfall: 100 });
+    // con data oltre lo stipendio non conta ancora
+    const later = forecast(base([plan({ id: 'debito', name: 'Debito', cost: 500, targetDate: '2026-12-01' })], 300), '2026-10-15', '2026-11-14');
+    expect(later.unassigned.shortfall).toBe(0);
   });
 });

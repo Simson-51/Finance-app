@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { ACCOUNT_TYPES, accountBalance, accountName, euro, forecast, isVisible, monthOf, daysInMonth, parseAmount, today, totalBalance, uid, usableAccounts } from '../finance';
+import { ACCOUNT_TYPES, accountBalance, accountName, commitments, euro, forecast, isVisible, monthOf, daysInMonth, parseAmount, today, totalBalance, uid, usableAccounts } from '../finance';
 import type { Store } from '../store';
 import type { Account, AccountType } from '../types';
 import { Alerts, shortfallText, useForecast, WarnIcon } from './Alerts';
@@ -192,6 +192,7 @@ export function AccountsView({ store, payday }: { store: Store; payday: number }
   const total = totalBalance(store.data, now);
   const canDelete = (a: Account) => accounts.length > 1 && !transactions.some((t) => t.accountId === a.id || t.toAccountId === a.id);
   const fc = useForecast(store.data, payday);
+  const committed = commitments(store.data);
   const month = monthOf(now);
   const monthEnd = forecast(store.data, now, `${month}-${String(daysInMonth(month)).padStart(2, '0')}`);
 
@@ -214,6 +215,11 @@ export function AccountsView({ store, payday }: { store: Store; payday: number }
             <span className="list-sub">
               {ACCOUNT_TYPES[a.type].label} · iniziale {euro(a.initialBalance)} · {count} {count === 1 ? 'movimento' : 'movimenti'}
             </span>
+            {committed.byAccount[a.id] ? (
+              <span className="list-sub">
+                Impegnati {euro(committed.byAccount[a.id])} · libero {euro(balance - committed.byAccount[a.id])}
+              </span>
+            ) : null}
             {a.minBalance ? (
               <span className="list-sub">
                 Budget {euro(a.minBalance)} · ricarica {a.autoTopUp ? 'automatica' : 'manuale'} da {accountName(accounts, a.topUpFrom)}
@@ -241,6 +247,12 @@ export function AccountsView({ store, payday }: { store: Store; payday: number }
       <div className="card stat-card">
         <span className="muted small">Disponibilità totale oggi</span>
         <strong className={`big ${total < 0 ? 'amount uscita' : ''}`}>{euro(total)}</strong>
+        {committed.total > 0 && (
+          <span className="small">
+            Spese sicure da pagare: <strong className="amount uscita">{euro(committed.total)}</strong> · disponibile libero:{' '}
+            <strong className={total - committed.total < 0 ? 'amount uscita' : 'amount entrata'}>{euro(total - committed.total)}</strong>
+          </span>
+        )}
         <span className="muted small">
           Somma dei saldi di tutti i conti: saldo iniziale più i movimenti registrati. Tocca un conto per modificarne il saldo iniziale.
         </span>
