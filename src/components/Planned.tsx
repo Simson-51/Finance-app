@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { CATEGORIES, euro, formatDate, parseAmount, plannedProgress, sortPlanned, sum, today, uid } from '../finance';
+import { ACCOUNT_TYPES, accountName, CATEGORIES, commitments, euro, formatDate, parseAmount, plannedProgress, sortPlanned, sum, today, uid, usableAccounts } from '../finance';
 import type { Store } from '../store';
 import type { Account, Planned, Priority } from '../types';
 import { AccountSelect } from './Accounts';
@@ -9,31 +9,38 @@ const PRIORITIES: Priority[] = ['alta', 'media', 'bassa'];
 const toInput = (n: number) => (n ? String(n).replace('.', ',') : '');
 
 function PlannedForm({
+  accounts,
   initial,
+  defaultCommitted = false,
   onSave,
   onDelete,
   onClose,
 }: {
+  accounts: Account[];
   initial?: Planned;
+  defaultCommitted?: boolean;
   onSave: (p: Omit<Planned, 'updatedAt'>) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
+  const [committed, setCommitted] = useState(initial?.committed ?? defaultCommitted);
   const [name, setName] = useState(initial?.name ?? '');
   const [cost, setCost] = useState(toInput(initial?.cost ?? 0));
   const [saved, setSaved] = useState(toInput(initial?.saved ?? 0));
   const [priority, setPriority] = useState<Priority>(initial?.priority ?? 'media');
   const [category, setCategory] = useState(initial?.category ?? 'Altro');
   const [targetDate, setTargetDate] = useState(initial?.targetDate ?? '');
+  const [accountId, setAccountId] = useState(initial?.accountId ?? '');
   const [notes, setNotes] = useState(initial?.notes ?? '');
   const [error, setError] = useState('');
+  const usable = usableAccounts(accounts, initial?.accountId);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const c = parseAmount(cost);
-    const s = saved.trim() ? parseAmount(saved) : 0;
+    const s = !committed && saved.trim() ? parseAmount(saved) : 0;
     if (!name.trim()) return setError('Inserisci un nome');
-    if (!(c > 0)) return setError('Inserisci un costo maggiore di zero');
+    if (!(c > 0)) return setError(committed ? "Inserisci l'importo" : 'Inserisci un costo maggiore di zero');
     if (!(s >= 0)) return setError('La cifra messa da parte non è valida');
     onSave({
       ...initial,
@@ -45,50 +52,119 @@ function PlannedForm({
       category,
       targetDate: targetDate || undefined,
       notes: notes.trim(),
+      committed: committed || undefined,
+      accountId: committed && accountId ? accountId : undefined,
     });
     onClose();
   };
 
   return (
-    <Modal title={initial ? 'Modifica acquisto' : 'Nuovo acquisto in programma'} onClose={onClose}>
+    <Modal title={initial ? (committed ? 'Modifica spesa sicura' : 'Modifica acquisto') : committed ? 'Nuova spesa sicura' : 'Nuovo acquisto in programma'} onClose={onClose}>
       <form onSubmit={submit} className="form">
-        <Field label="Cosa vuoi comprare">
-          {(id) => <input id={id} autoFocus placeholder="Es. Nuovo portatile" value={name} onChange={(e) => setName(e.target.value)} />}
+        <div className="segmented" role="radiogroup" aria-label="Tipo">
+          <button type="button" role="radio" aria-checked={!committed} className={!committed ? 'active' : ''} onClick={() => setCommitted(false)}>
+            Da comprare
+          </button>
+          <button type="button" role="radio" aria-checked={committed} className={committed ? 'active' : ''} onClick={() => setCommitted(true)}>
+            Spesa sicura
+          </button>
+        </div>
+        <p className="small muted form-help">
+          {committed
+            ? "Un debito o un acquisto già fatto ma non ancora addebitato: conta negli impegni, nel disponibile libero e negli avvisi."
+            : 'Qualcosa che vorresti comprare: puoi mettere da parte i soldi un po’ alla volta.'}
+        </p>
+        <Field label={committed ? 'Descrizione' : 'Cosa vuoi comprare'}>
+          {(id) => (
+            <input
+              id={id}
+              autoFocus
+              placeholder={committed ? 'Es. Debito con i miei, Switch 2 (Amazon)' : 'Es. Nuovo portatile'}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          )}
         </Field>
-        <div className="row-2">
-          <Field label="Costo previsto (€)">
-            {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={cost} onChange={(e) => setCost(e.target.value)} />}
-          </Field>
-          <Field label="Già messo da parte (€)">
-            {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={saved} onChange={(e) => setSaved(e.target.value)} />}
-          </Field>
-        </div>
-        <div className="row-2">
-          <Field label="Entro il" hint="Facoltativa: calcola quanto risparmiare al mese">
-            {(id) => <input id={id} type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />}
-          </Field>
-          <Field label="Categoria">
-            {(id) => (
-              <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
-                {CATEGORIES.uscita.map((c) => (
-                  <option key={c}>{c}</option>
+        {committed ? (
+          <>
+            <div className="row-2">
+              <Field label="Importo (€)">
+                {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={cost} onChange={(e) => setCost(e.target.value)} />}
+              </Field>
+              <Field label="Pagherò con">
+                {(id) => (
+                  <select id={id} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                    <option value="">Non ancora deciso</option>
+                    {usable.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {ACCOUNT_TYPES[a.type].icon} {a.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            </div>
+            <div className="row-2">
+              <Field label="Data prevista" hint="Lasciala vuota se non la sai: conterà come da pagare da subito.">
+                {(id) => <input id={id} type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />}
+              </Field>
+              <Field label="Categoria">
+                {(id) => (
+                  <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
+                    {CATEGORIES.uscita.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="row-2">
+              <Field label="Costo previsto (€)">
+                {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={cost} onChange={(e) => setCost(e.target.value)} />}
+              </Field>
+              <Field label="Già messo da parte (€)">
+                {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={saved} onChange={(e) => setSaved(e.target.value)} />}
+              </Field>
+            </div>
+            <div className="row-2">
+              <Field label="Entro il" hint="Facoltativa: calcola quanto risparmiare al mese">
+                {(id) => <input id={id} type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />}
+              </Field>
+              <Field label="Categoria">
+                {(id) => (
+                  <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
+                    {CATEGORIES.uscita.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            </div>
+            <div className="field">
+              <span className="label">Priorità</span>
+              <div className="segmented" role="radiogroup" aria-label="Priorità">
+                {PRIORITIES.map((p) => (
+                  <button key={p} type="button" role="radio" aria-checked={priority === p} className={priority === p ? `active prio-${p}` : ''} onClick={() => setPriority(p)}>
+                    {p[0].toUpperCase() + p.slice(1)}
+                  </button>
                 ))}
-              </select>
-            )}
-          </Field>
-        </div>
-        <div className="field">
-          <span className="label">Priorità</span>
-          <div className="segmented" role="radiogroup" aria-label="Priorità">
-            {PRIORITIES.map((p) => (
-              <button key={p} type="button" role="radio" aria-checked={priority === p} className={priority === p ? `active prio-${p}` : ''} onClick={() => setPriority(p)}>
-                {p[0].toUpperCase() + p.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
+              </div>
+            </div>
+          </>
+        )}
         <Field label="Note">
-          {(id) => <textarea id={id} rows={2} placeholder="Link, modello, negozio…" value={notes} onChange={(e) => setNotes(e.target.value)} />}
+          {(id) => (
+            <textarea
+              id={id}
+              rows={2}
+              placeholder={committed ? 'Es. da restituire entro Natale' : 'Link, modello, negozio…'}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          )}
         </Field>
         {error && <p className="error">{error}</p>}
         <div className="form-actions">
@@ -163,7 +239,9 @@ function BuyForm({
   onClose: () => void;
 }) {
   const [amount, setAmount] = useState(toInput(item.cost));
-  const [accountId, setAccountId] = useState((accounts.find((a) => !a.archived) ?? accounts[0]).id);
+  const [accountId, setAccountId] = useState(
+    accounts.find((a) => a.id === item.accountId && !a.archived)?.id ?? (accounts.find((a) => !a.archived) ?? accounts[0]).id,
+  );
   const [date, setDate] = useState(today());
   const [error, setError] = useState('');
   const submit = (e: FormEvent) => {
@@ -175,11 +253,11 @@ function BuyForm({
     onClose();
   };
   return (
-    <Modal title={`Hai comprato “${item.name}”?`} onClose={onClose}>
+    <Modal title={item.committed ? `Hai pagato “${item.name}”?` : `Hai comprato “${item.name}”?`} onClose={onClose}>
       <form onSubmit={submit} className="form">
         <p className="muted">Verrà registrata un'uscita nella categoria {item.category}.</p>
         <div className="row-2">
-          <Field label="Prezzo pagato (€)">
+          <Field label={item.committed ? 'Importo pagato (€)' : 'Prezzo pagato (€)'}>
             {(id) => <input id={id} inputMode="decimal" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />}
           </Field>
           <Field label="Data">{(id) => <input id={id} type="date" value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
@@ -192,7 +270,7 @@ function BuyForm({
             Annulla
           </button>
           <button type="submit" className="btn primary">
-            Conferma acquisto
+            {item.committed ? 'Conferma pagamento' : 'Conferma acquisto'}
           </button>
         </div>
       </form>
@@ -201,12 +279,15 @@ function BuyForm({
 }
 
 export function PlannedView({ store }: { store: Store }) {
-  const [editing, setEditing] = useState<Planned | 'new' | null>(null);
+  const [editing, setEditing] = useState<Planned | 'new' | 'new-committed' | null>(null);
   const [saving, setSaving] = useState<Planned | null>(null);
   const [buying, setBuying] = useState<Planned | null>(null);
   const [showDone, setShowDone] = useState(false);
 
-  const todo = sortPlanned(store.data.planned.filter((p) => !p.boughtDate));
+  const open = store.data.planned.filter((p) => !p.boughtDate);
+  const todo = sortPlanned(open.filter((p) => !p.committed));
+  const sure = [...open.filter((p) => p.committed)].sort((a, b) => (a.targetDate ?? '').localeCompare(b.targetDate ?? '') || a.name.localeCompare(b.name));
+  const c = commitments(store.data);
   const done = [...store.data.planned.filter((p) => p.boughtDate)].sort((a, b) => b.boughtDate!.localeCompare(a.boughtDate!));
   const totalCost = sum(todo.map((p) => ({ amount: p.cost })));
   const totalSaved = sum(todo.map((p) => ({ amount: Math.min(p.saved, p.cost) })));
@@ -215,10 +296,70 @@ export function PlannedView({ store }: { store: Store }) {
   return (
     <div className="view">
       <div className="view-head">
-        <h2>Acquisti in programma</h2>
+        <h2>Acquisti e spese sicure</h2>
         <button className="btn primary" onClick={() => setEditing('new')}>
           + Aggiungi
         </button>
+      </div>
+
+      <section className="sure-section">
+        <div className="card-head">
+          <h3>Spese sicure</h3>
+          <button className="link" onClick={() => setEditing('new-committed')}>
+            + Spesa sicura
+          </button>
+        </div>
+        {sure.length === 0 ? (
+          <p className="muted small">
+            Debiti o acquisti già fatti ma non ancora addebitati (es. un prestito da restituire, un ordine Amazon). Contano nel disponibile
+            libero e negli avvisi.
+          </p>
+        ) : (
+          <>
+            <div className="card stat-card">
+              <div className="stat-row">
+                <div>
+                  <span className="muted">Impegnati</span>
+                  <strong className="big amount uscita">{euro(c.total)}</strong>
+                </div>
+                {c.unassignedTotal > 0 && (
+                  <div className="right">
+                    <span className="muted">Senza conto deciso</span>
+                    <strong className="big">{euro(c.unassignedTotal)}</strong>
+                  </div>
+                )}
+              </div>
+            </div>
+            <ul className="list card">
+              {sure.map((p) => (
+                <li key={p.id}>
+                  <div className="list-item">
+                    <span className="badge uscita" aria-hidden>
+                      ⏳
+                    </span>
+                    <button className="list-main as-button" onClick={() => setEditing(p)}>
+                      <span className="list-title">{p.name}</span>
+                      <span className="list-sub">
+                        {p.accountId ? accountName(store.data.accounts, p.accountId) : 'Conto da decidere'} ·{' '}
+                        {p.targetDate ? (p.targetDate < today() ? `previsto il ${formatDate(p.targetDate)} (passato)` : `il ${formatDate(p.targetDate)}`) : 'data non nota'}
+                      </span>
+                    </button>
+                    <span className="amount-col">
+                      <span className="amount uscita">{euro(p.cost)}</span>
+                      <button className="btn ghost small" onClick={() => setBuying(p)}>
+                        ✓ Pagato
+                      </button>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
+
+      <div className="card-head wishes-head">
+        <h3>Da comprare</h3>
       </div>
 
       {todo.length > 0 && (
@@ -242,12 +383,11 @@ export function PlannedView({ store }: { store: Store }) {
         </div>
       )}
 
-      {todo.length === 0 && done.length === 0 && (
+      {todo.length === 0 && (
         <Empty icon="🛍️" title="Nessun acquisto in programma">
           Annota le cose che vuoi comprare, quanto costano ed entro quando: l'app ti dice quanto mettere da parte ogni mese.
         </Empty>
       )}
-      {todo.length === 0 && done.length > 0 && <Empty icon="🎉" title="Hai completato tutti gli acquisti in programma" />}
 
       <div className="cards">
         {todo.map((p) => {
@@ -294,7 +434,7 @@ export function PlannedView({ store }: { store: Store }) {
       {done.length > 0 && (
         <section>
           <button className="link" onClick={() => setShowDone((v) => !v)}>
-            {showDone ? '▾' : '▸'} Acquisti completati ({done.length})
+            {showDone ? '▾' : '▸'} Completati ({done.length})
           </button>
           {showDone && (
             <ul className="list card">
@@ -306,12 +446,14 @@ export function PlannedView({ store }: { store: Store }) {
                     </span>
                     <span className="list-main">
                       <span className="list-title">{p.name}</span>
-                      <span className="list-sub">Acquistato il {formatDate(p.boughtDate!)}</span>
+                      <span className="list-sub">
+                        {p.committed ? 'Pagato' : 'Acquistato'} il {formatDate(p.boughtDate!)}
+                      </span>
                     </span>
                     <button
                       className="btn ghost small"
                       onClick={() => {
-                        if (confirm(`Riportare “${p.name}” tra gli acquisti da fare? L'uscita registrata verrà eliminata.`)) store.undoBought(p);
+                        if (confirm(`Riportare “${p.name}” tra le spese da fare? L'uscita registrata verrà eliminata.`)) store.undoBought(p);
                       }}
                     >
                       Annulla
@@ -325,7 +467,14 @@ export function PlannedView({ store }: { store: Store }) {
       )}
 
       {editing && (
-        <PlannedForm initial={editing === 'new' ? undefined : editing} onSave={store.savePlanned} onDelete={store.deletePlanned} onClose={() => setEditing(null)} />
+        <PlannedForm
+          accounts={store.data.accounts}
+          initial={typeof editing === 'string' ? undefined : editing}
+          defaultCommitted={editing === 'new-committed'}
+          onSave={store.savePlanned}
+          onDelete={store.deletePlanned}
+          onClose={() => setEditing(null)}
+        />
       )}
       {saving && <SaveMoneyForm item={saving} onSave={store.savePlanned} onClose={() => setSaving(null)} />}
       {buying && (

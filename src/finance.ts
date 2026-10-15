@@ -216,7 +216,10 @@ export function monthSummary(data: Data, month: string, asOf = today()): MonthSu
   const active = data.recurring.filter((r) => recurringDue(r, month));
   const pending = active.filter((r) => !recurringPayment(data.transactions, r, month));
   const pendingIncome = round(sum(pending.filter((r) => r.kind === 'entrata')) + sum(future.filter((t) => t.kind === 'entrata')));
-  const pendingExpenses = round(sum(pending.filter((r) => r.kind === 'uscita')) + sum(future.filter((t) => t.kind === 'uscita')));
+  const commitments = openCommitments(data).filter((p) => p.targetDate && monthOf(p.targetDate) === month && p.targetDate > asOf);
+  const pendingExpenses = round(
+    sum(pending.filter((r) => r.kind === 'uscita')) + sum(future.filter((t) => t.kind === 'uscita')) + sum(commitments.map((p) => ({ amount: p.cost }))),
+  );
 
   const cats = new Map<string, number>();
   for (const t of txs) if (t.kind === 'uscita') cats.set(t.category, (cats.get(t.category) ?? 0) + t.amount);
@@ -322,6 +325,38 @@ export interface ScheduledEvent {
   recurring?: boolean;
   /** Data originale di una voce mensile scaduta e non registrata (contata come dovuta oggi). */
   overdue?: string;
+  /** Spesa sicura (debito o acquisto da addebitare). */
+  committed?: boolean;
+  /** Spesa sicura senza data: contata come dovuta da subito. */
+  undated?: boolean;
+}
+
+/** Spese sicure non ancora pagate. */
+export const openCommitments = (data: Pick<Data, 'planned'>) => data.planned.filter((p) => p.committed && !p.boughtDate);
+
+/** Conto della spesa sicura, se indicato e ancora in uso. */
+export const commitmentAccount = (data: Pick<Data, 'accounts'>, p: Planned) =>
+  data.accounts.find((a) => a.id === p.accountId && !a.archived);
+
+export interface Commitments {
+  total: number;
+  /** Totale impegnato per conto. */
+  byAccount: Record<string, number>;
+  /** Spese sicure senza un conto deciso. */
+  unassigned: Planned[];
+  unassignedTotal: number;
+}
+
+export function commitments(data: Pick<Data, 'planned' | 'accounts'>): Commitments {
+  const byAccount: Record<string, number> = {};
+  const unassigned: Planned[] = [];
+  for (const p of openCommitments(data)) {
+    const a = commitmentAccount(data, p);
+    if (a) byAccount[a.id] = round((byAccount[a.id] ?? 0) + p.cost);
+    else unassigned.push(p);
+  }
+  const open = openCommitments(data);
+  return { total: sum(open.map((p) => ({ amount: p.cost }))), byAccount, unassigned, unassignedTotal: sum(unassigned.map((p) => ({ amount: p.cost }))) };
 }
 
 const endOfMonth = (month: string) => `${month}-${pad(daysInMonth(month))}`;
@@ -371,6 +406,14 @@ export function scheduledEvents(data: Data, from = today(), to = forecastHorizon
       });
     }
   }
+  // spese sicure con un conto: alla data prevista, oppure da subito se la data non è nota o è passata
+  for (const p of openCommitments(data)) {
+    const account = commitmentAccount(data, p);
+    if (!account) continue;
+    const date = p.targetDate && p.targetDate > from ? p.targetDate : from;
+    if (date > to) continue;
+    events.push({ date, kind: 'uscita', amount: p.cost, accountId: account.id, label: p.name, committed: true, undated: !p.targetDate });
+  }
   return events.sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -398,12 +441,19 @@ export interface ForecastStep {
   kind: 'entrata' | 'uscita' | 'trasferimento' | 'ricarica';
   recurring?: boolean;
   overdue?: string;
+  committed?: boolean;
+  undated?: boolean;
 }
 
 export interface Forecast {
   accounts: Record<string, AccountForecast>;
   /** Ricariche da fare oggi per i conti con budget minimo in modalità manuale. */
   topUps: { accountId: string; fromId: string; amount: number }[];
+  /**
+   * Spese sicure senza conto che cadono nel periodo: devono essere coperte da quello che
+   * resta su tutti i conti a fine periodo.
+   */
+  unassigned: { items: Planned[]; total: number; available: number; shortfall: number };
 }
 
 /**
@@ -431,7 +481,7 @@ export function forecast(data: Data, from = today(), to = forecastHorizon(from))
   for (const day of days) {
     for (const e of events) {
       if (e.date !== day) continue;
-      const base = { date: day, kind: e.kind, recurring: e.recurring, overdue: e.overdue };
+      const base = { date: day, kind: e.kind, recurring: e.recurring, overdue: e.overdue, committed: e.committed, undated: e.undated };
       if (e.kind === 'trasferimento') {
         move(e.accountId, -e.amount, { ...base, label: `${e.label} → ${name(e.toAccountId)}` });
         move(e.toAccountId, e.amount, { ...base, label: `${e.label} ← ${name(e.accountId)}` });
@@ -461,7 +511,10 @@ export function forecast(data: Data, from = today(), to = forecastHorizon(from))
     }
   }
   for (const a of data.accounts) result[a.id].end = round(bal[a.id]);
-  return { accounts: result, topUps };
+  const items = commitments(data).unassigned.filter((p) => !p.targetDate || p.targetDate <= to);
+  const total = sum(items.map((p) => ({ amount: p.cost })));
+  const available = round(data.accounts.reduce((s, a) => s + Math.max(0, result[a.id].end), 0));
+  return { accounts: result, topUps, unassigned: { items, total, available, shortfall: round(Math.max(0, total - available)) } };
 }
 
 export interface PlannedProgress {

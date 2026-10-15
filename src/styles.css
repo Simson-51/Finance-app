@@ -1763,3 +1763,46 @@ input:not([type='checkbox']) {
 .balance-card .segmented button {
   white-space: nowrap;
 }
+
+/* ---------- Spese sicure ---------- */
+
+.sure-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sure-section .card-head,
+.wishes-head {
+  margin-bottom: 0;
+}
+
+.sure-section p {
+  margin: 0;
+}
+
+.form-help {
+  margin: -6px 0 0;
+}
+
+.free-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.free-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+}
+
+.free-calc {
+  flex: 1 1 200px;
+}

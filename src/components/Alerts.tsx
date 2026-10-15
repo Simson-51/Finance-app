@@ -59,6 +59,7 @@ function ForecastDetail({ account, fc, onClose }: { account: Account; fc: Payday
               <span className="list-sub">
                 {formatDate(s.date)}
                 {s.recurring && ' · voce mensile'}
+                {s.committed && (s.undated ? ' · spesa sicura, data non nota' : ' · spesa sicura')}
                 {s.overdue && <strong className="overdue"> · scaduta il {formatDate(s.overdue)}, non segnata come pagata</strong>}
               </span>
             </span>
@@ -99,8 +100,10 @@ export const shortfallText = (shortfall: number, date?: string) =>
 export function Alerts({ store, fc }: { store: Store; fc: PaydayForecast }) {
   const { accounts } = store.data;
   const [detail, setDetail] = useState<Account | null>(null);
+  const [unassignedOpen, setUnassignedOpen] = useState(false);
   const short = accounts.filter((a) => fc.accounts[a.id]?.shortfall > 0);
-  if (!short.length && !fc.topUps.length) return null;
+  const un = fc.unassigned;
+  if (!short.length && !fc.topUps.length && !un.shortfall) return null;
 
   return (
     <div className="alerts">
@@ -120,6 +123,19 @@ export function Alerts({ store, fc }: { store: Store; fc: PaydayForecast }) {
           </button>
         );
       })}
+      {un.shortfall > 0 && (
+        <button className="alert warn clickable" onClick={() => setUnassignedOpen(true)}>
+          <WarnIcon />
+          <div>
+            <strong>Spese sicure da coprire</strong>
+            <p>
+              Mancano {euro(un.shortfall)}: entro lo stipendio del {formatDate(fc.payday)} hai {euro(un.total)} di spese sicure senza conto, ma
+              sui conti resterebbero {euro(un.available)}.
+            </p>
+            <span className="alert-more">Vedi il dettaglio ›</span>
+          </div>
+        </button>
+      )}
       {fc.topUps.map((t) => (
         <div key={t.accountId} className="alert info">
           <span className="alert-icon" aria-hidden>
@@ -151,6 +167,37 @@ export function Alerts({ store, fc }: { store: Store; fc: PaydayForecast }) {
         </div>
       ))}
       {detail && <ForecastDetail account={detail} fc={fc} onClose={() => setDetail(null)} />}
+      {unassignedOpen && (
+        <Modal title="Spese sicure da coprire" onClose={() => setUnassignedOpen(false)}>
+          <p className="muted small detail-intro">
+            Spese sicure senza un conto deciso, confrontate con quello che resterebbe sui conti prima dello stipendio del {formatDate(fc.payday)}.
+          </p>
+          <ol className="steps">
+            {un.items.map((p) => (
+              <li key={p.id} className="step">
+                <span className="step-main">
+                  <span className="list-title">{p.name}</span>
+                  <span className="list-sub">{p.targetDate ? formatDate(p.targetDate) : 'data non nota'}</span>
+                </span>
+                <span className="amount uscita">−{euro(p.cost)}</span>
+              </li>
+            ))}
+            <li className="step start">
+              <span className="step-main">
+                <span className="list-title">Restano sui conti</span>
+                <span className="list-sub">dopo tutti i pagamenti previsti</span>
+              </span>
+              <span className="step-balance">{euro(un.available)}</span>
+            </li>
+          </ol>
+          <div className="detail-summary">
+            <span>
+              Mancano <strong className="amount uscita">{euro(un.shortfall)}</strong>.
+            </span>
+          </div>
+          <p className="note">💡 Quando sai con quale conto pagherai, indicalo nella spesa: l'avviso passerà su quel conto.</p>
+        </Modal>
+      )}
     </div>
   );
 }
