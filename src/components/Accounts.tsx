@@ -40,6 +40,7 @@ function AccountForm({
   accounts,
   initial,
   canDelete,
+  onAlign,
   onSave,
   onDelete,
   onClose,
@@ -47,6 +48,7 @@ function AccountForm({
   accounts: Account[];
   initial?: Account;
   canDelete: boolean;
+  onAlign?: () => void;
   onSave: (a: Omit<Account, 'updatedAt'>) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
@@ -103,6 +105,14 @@ function AccountForm({
         <Field label="Saldo iniziale (€)" hint="Quanto c'è su questo conto prima dei movimenti che registrerai nell'app. Può essere negativo (es. carta di credito).">
           {(id) => <input id={id} inputMode="decimal" placeholder="0,00" value={initialBalance} onChange={(e) => setInitialBalance(e.target.value)} />}
         </Field>
+        {initial && onAlign && (
+          <div className="note align-note">
+            <span>Il saldo nell'app non corrisponde a quello reale?</span>
+            <button type="button" className="btn primary small" onClick={onAlign}>
+              Allinea saldo
+            </button>
+          </div>
+        )}
         {sources.length > 0 && (
           <fieldset className="budget">
             <label className="check">
@@ -183,8 +193,65 @@ function AccountForm({
   );
 }
 
+/** Confronta il saldo dell'app con quello reale e registra la differenza come movimento da classificare. */
+function AlignForm({ account, balance, onAlign, onClose }: { account: Account; balance: number; onAlign: (real: number) => void; onClose: () => void }) {
+  const [real, setReal] = useState('');
+  const [error, setError] = useState('');
+  const value = real.trim() ? parseAmount(real) : NaN;
+  const diff = Number.isNaN(value) ? null : Math.round((value - balance) * 100) / 100;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (diff === null) return setError('Inserisci il saldo che vedi sul conto');
+    onAlign(value);
+    onClose();
+  };
+  return (
+    <Modal title={`Allinea ${account.name}`} onClose={onClose}>
+      <form onSubmit={submit} className="form">
+        <p className="muted">
+          Saldo nell'app: <strong>{euro(balance)}</strong>. Scrivi quello che vedi davvero sul conto: l'app ti dice quanto non hai segnato.
+        </p>
+        <Field label="Saldo reale (€)">
+          {(id) => <input id={id} inputMode="decimal" autoFocus placeholder="0,00" value={real} onChange={(e) => setReal(e.target.value)} />}
+        </Field>
+        {diff !== null && (
+          <p className="note" role="status">
+            {diff === 0 ? (
+              <>✓ Il saldo corrisponde già: non c'è nulla da allineare.</>
+            ) : diff < 0 ? (
+              <>
+                Mancano <strong className="amount uscita">{euro(-diff)}</strong> di spese non segnate. Verranno registrate come uscita «Da
+                classificare», che potrai dividere nelle spese giuste quando vuoi.
+              </>
+            ) : (
+              <>
+                Ci sono <strong className="amount entrata">{euro(diff)}</strong> in più rispetto all'app. Verranno registrati come entrata «Da
+                classificare», che potrai dividere quando vuoi.
+              </>
+            )}
+          </p>
+        )}
+        {account.minBalance && account.autoTopUp ? (
+          <p className="small muted">Questo conto ha la ricarica automatica: dopo l'allineamento l'app lo riporta al budget minimo.</p>
+        ) : null}
+        {error && <p className="error">{error}</p>}
+        <div className="form-actions">
+          <span className="spacer" />
+          <button type="button" className="btn ghost" onClick={onClose}>
+            Annulla
+          </button>
+          <button type="submit" className="btn primary" disabled={diff === 0}>
+            Allinea
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function AccountsView({ store, payday }: { store: Store; payday: number }) {
   const [editing, setEditing] = useState<Account | 'new' | null>(null);
+  const [aligning, setAligning] = useState<Account | null>(null);
   const { accounts, transactions } = store.data;
   const now = today();
   const active = accounts.filter((a) => !a.archived);
@@ -274,9 +341,25 @@ export function AccountsView({ store, payday }: { store: Store; payday: number }
           accounts={accounts}
           initial={editing === 'new' ? undefined : editing}
           canDelete={editing !== 'new' && canDelete(editing)}
+          onAlign={
+            editing !== 'new' && !editing.archived
+              ? () => {
+                  setAligning(editing);
+                  setEditing(null);
+                }
+              : undefined
+          }
           onSave={store.saveAccount}
           onDelete={store.deleteAccount}
           onClose={() => setEditing(null)}
+        />
+      )}
+      {aligning && (
+        <AlignForm
+          account={aligning}
+          balance={accountBalance(store.data, aligning, now)}
+          onAlign={(real) => store.alignBalance(aligning.id, real)}
+          onClose={() => setAligning(null)}
         />
       )}
     </div>

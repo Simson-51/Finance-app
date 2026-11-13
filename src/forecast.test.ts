@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountBalance, categoriesFor, emptyData, forecast, merge, monthSummary, normalize, overdueRecurring, reconcileTopUps, scheduledEvents, topUpId } from './finance';
+import { accountBalance, categoriesFor, emptyData, forecast, macroOf, macroSummary, merge, sameData, monthSummary, normalize, overdueRecurring, reconcileTopUps, scheduledEvents, topUpId } from './finance';
 import type { Account, Data, Planned, Recurring, Transaction } from './types';
 
 const TODAY = '2026-10-14';
@@ -449,5 +449,55 @@ describe('categorie personalizzate', () => {
     const merged = merge(old, { ...old, categories: [cat('uscita', 'Palestra')] });
     expect(merged.categories.map((c) => c.name)).toEqual(['Palestra']);
     expect(merged.accounts).toHaveLength(1);
+  });
+});
+
+describe('bisogni, desideri, risparmio', () => {
+  const d = data({
+    accounts: [account({ id: 'hype', initialBalance: 1000 }), account({ id: 'salvadanaio', type: 'risparmio' })],
+    categories: [{ id: 'cat-uscita-palestra', kind: 'uscita', name: 'Palestra', macro: 'bisogni', updatedAt: 1 }],
+    recurring: [rec({ id: 'netflix', amount: 14, day: 20, category: 'Abbonamenti', accountId: 'hype', startMonth: '2026-10' })],
+    transactions: [
+      tx({ id: 'a', kind: 'uscita', amount: 60, date: '2026-10-02', accountId: 'hype', category: 'Spesa' }),
+      tx({ id: 'b', kind: 'uscita', amount: 30, date: '2026-10-03', accountId: 'hype', category: 'Ristoranti' }),
+      tx({ id: 'c', kind: 'uscita', amount: 40, date: '2026-10-04', accountId: 'hype', category: 'Palestra' }),
+      tx({ id: 'd', kind: 'trasferimento', amount: 100, date: '2026-10-05', accountId: 'hype', toAccountId: 'salvadanaio', category: 'Trasferimento' }),
+      tx({ id: 'e', kind: 'uscita', amount: 25, date: '2026-10-06', accountId: 'hype', category: 'Da classificare', adjustment: true }),
+      tx({ id: 'f', kind: 'uscita', amount: 20, date: '2026-10-28', accountId: 'hype', category: 'Svago' }),
+    ],
+  });
+
+  it('assegna ogni categoria alla sua macro-categoria, con le scelte dell\'utente', () => {
+    expect(macroOf([], 'Spesa')).toBe('bisogni');
+    expect(macroOf([], 'Ristoranti')).toBe('desideri');
+    expect(macroOf([], 'Categoria nuova')).toBe('desideri');
+    expect(macroOf(d.categories, 'Palestra')).toBe('bisogni');
+    expect(macroOf([], 'Da classificare')).toBeNull();
+  });
+
+  it('somma lo speso e il previsto del mese, compresi i trasferimenti ai risparmi', () => {
+    const m = macroSummary(d, '2026-10', TODAY);
+    expect(m.spent).toEqual({ bisogni: 100, desideri: 30, risparmio: 100 });
+    // Netflix non ancora registrata e lo svago con data futura
+    expect(m.pending.desideri).toBe(34);
+    expect(m.unclassified).toBe(25);
+    expect(m.wants).toBeNull();
+  });
+
+  it('avvisa quando il budget dei desideri sta per essere raggiunto o è superato', () => {
+    const withBudget = (wantsBudget: number) => macroSummary({ ...d, settings: { wantsBudget, updatedAt: 1 } }, '2026-10', TODAY).wants;
+    expect(withBudget(200)).toMatchObject({ total: 64, left: 136, state: 'ok' });
+    expect(withBudget(80)).toMatchObject({ left: 16, state: 'near' });
+    expect(withBudget(50)).toMatchObject({ left: -14, state: 'over' });
+  });
+
+  it('le impostazioni si uniscono tra dispositivi: vince la più recente', () => {
+    const a = { ...d, settings: { wantsBudget: 100, updatedAt: 1 } };
+    const b = { ...d, settings: { wantsBudget: 250, updatedAt: 2 } };
+    expect(merge(a, b).settings?.wantsBudget).toBe(250);
+    expect(merge(b, a).settings?.wantsBudget).toBe(250);
+    expect(merge(d, b).settings?.wantsBudget).toBe(250);
+    expect(sameData(a, b)).toBe(false);
+    expect(normalize(JSON.parse(JSON.stringify(b))).settings?.wantsBudget).toBe(250);
   });
 });

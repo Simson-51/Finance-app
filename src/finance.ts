@@ -1,4 +1,4 @@
-import type { Account, AccountType, Category, Collection, Data, Kind, Planned, Recurring, Transaction } from './types';
+import type { Account, AccountType, Category, Collection, Data, Kind, Macro, Planned, Recurring, Transaction } from './types';
 
 export const CATEGORIES: Record<Kind, string[]> = {
   entrata: ['Stipendio', 'Freelance', 'Rimborsi', 'Regali', 'Investimenti', 'Altro'],
@@ -53,6 +53,77 @@ export const emptyData = (): Data => ({
 
 /** Id fisso di una categoria personalizzata: lo stesso nome su due dispositivi dà lo stesso record. */
 export const categoryId = (kind: Kind, name: string) => `cat-${kind}-${name.trim().toLowerCase()}`;
+
+/** Categoria delle differenze di saldo non ancora divise nelle spese giuste. */
+export const UNCLASSIFIED = 'Da classificare';
+
+export const MACROS: { id: Macro; label: string; hint: string }[] = [
+  { id: 'bisogni', label: 'Bisogni', hint: 'necessari' },
+  { id: 'desideri', label: 'Desideri', hint: 'tagliabili' },
+  { id: 'risparmio', label: 'Risparmio', hint: 'messo da parte' },
+];
+
+const NEEDS = ['casa', 'bollette', 'spesa', 'trasporti', 'salute', 'istruzione'];
+
+/**
+ * Macro-categoria di una categoria di spesa: quella scelta dall'utente, altrimenti i bisogni per
+ * le spese necessarie predefinite e i desideri per tutto il resto. Le differenze ancora da
+ * classificare non ne hanno una.
+ */
+export function macroOf(custom: Category[], category: string): Macro | null {
+  if (category === UNCLASSIFIED) return null;
+  const key = category.toLowerCase();
+  const own = custom.find((c) => c.kind === 'uscita' && c.name.toLowerCase() === key)?.macro;
+  return own ?? (NEEDS.includes(key) ? 'bisogni' : 'desideri');
+}
+
+/** Da questa quota del budget dei desideri parte l'avviso. */
+export const BUDGET_WARN_AT = 0.8;
+
+export interface MacroSummary {
+  /** Già speso nel mese per macro-categoria (il risparmio comprende i trasferimenti verso i conti di risparmio). */
+  spent: Record<Macro, number>;
+  /** Ancora previsto nel mese: movimenti futuri e voci mensili non registrate. */
+  pending: Record<Macro, number>;
+  /** Differenze di saldo non ancora divise. */
+  unclassified: number;
+  /** Stato del budget dei desideri, se impostato. */
+  wants: { budget: number; total: number; left: number; state: 'ok' | 'near' | 'over' } | null;
+}
+
+export function macroSummary(data: Data, month: string, asOf = today()): MacroSummary {
+  const spent: Record<Macro, number> = { bisogni: 0, desideri: 0, risparmio: 0 };
+  const pending: Record<Macro, number> = { bisogni: 0, desideri: 0, risparmio: 0 };
+  let unclassified = 0;
+  const savings = new Set(data.accounts.filter((a) => a.type === 'risparmio').map((a) => a.id));
+  for (const t of transactionsIn(data.transactions, month)) {
+    const bucket = t.date <= asOf ? spent : pending;
+    if (t.kind === 'trasferimento') {
+      // soldi spostati su un conto di risparmio (o ripresi da lì)
+      const into = Number(savings.has(t.toAccountId ?? '')) - Number(savings.has(t.accountId));
+      bucket.risparmio += into * t.amount;
+    } else if (t.kind === 'uscita') {
+      const m = macroOf(data.categories, t.category);
+      if (m) bucket[m] += t.amount;
+      else unclassified += t.amount;
+    }
+  }
+  for (const r of data.recurring) {
+    if (r.kind !== 'uscita' || !recurringDue(r, month) || recurringPayment(data.transactions, r, month)) continue;
+    const m = macroOf(data.categories, r.category);
+    if (m) pending[m] += r.amount;
+  }
+  for (const m of MACROS) {
+    spent[m.id] = round(spent[m.id]);
+    pending[m.id] = round(pending[m.id]);
+  }
+  const budget = data.settings?.wantsBudget;
+  const total = round(spent.desideri + pending.desideri);
+  const wants = budget && budget > 0
+    ? { budget, total, left: round(budget - total), state: total > budget ? ('over' as const) : total >= budget * BUDGET_WARN_AT ? ('near' as const) : ('ok' as const) }
+    : null;
+  return { spent, pending, unclassified: round(unclassified), wants };
+}
 
 /**
  * Categorie tra cui scegliere: quelle predefinite più quelle dell'utente ("Altro" resta in fondo).
@@ -618,6 +689,7 @@ export function normalize(raw: Partial<Data> & { version?: number }): Data {
     recurring: (raw.recurring ?? []).map(stamp),
     planned: (raw.planned ?? []).map(stamp),
     categories: (raw.categories ?? []).map(stamp),
+    ...(raw.settings ? { settings: stamp(raw.settings) } : {}),
     deleted: raw.deleted ?? {},
   };
   return ensureAccount(data);
@@ -674,6 +746,10 @@ export function merge(a: Data, b: Data): Data {
     return [...map.values()].filter((item) => !(deleted[item.id] >= item.updatedAt));
   };
 
+  // impostazioni: vince la modifica più recente (a parità, scelta deterministica)
+  const [sa, sb] = [a.settings, b.settings];
+  const settings = !sa || !sb ? (sa ?? sb) : sa.updatedAt > sb.updatedAt || (sa.updatedAt === sb.updatedAt && JSON.stringify(sa) >= JSON.stringify(sb)) ? sa : sb;
+
   return ensureAccount({
     version: 2,
     accounts: pick(a.accounts, b.accounts),
@@ -681,6 +757,7 @@ export function merge(a: Data, b: Data): Data {
     recurring: pick(a.recurring, b.recurring),
     planned: pick(a.planned, b.planned),
     categories: pick(a.categories ?? [], b.categories ?? []),
+    ...(settings ? { settings } : {}),
     deleted,
   });
 }
@@ -691,6 +768,7 @@ export function sameData(a: Data, b: Data): boolean {
     JSON.stringify([
       ...COLLECTIONS.map((c) => [...(d[c] as { id: string }[])].sort((x, y) => x.id.localeCompare(y.id))),
       Object.entries(d.deleted).sort(([x], [y]) => x.localeCompare(y)),
+      d.settings ?? null,
     ]);
   return canon(a) === canon(b);
 }

@@ -9,7 +9,121 @@ import { CategorySelect, useCategories } from './categories';
 const KIND_LABEL: Record<TxKind, string> = { uscita: 'Uscita', entrata: 'Entrata', trasferimento: 'Trasferimento' };
 const TRANSFER_CATEGORY = 'Trasferimento';
 
-export function TransactionForm({
+type Part = { amount: string; category: string; description: string };
+
+/** Divide una differenza di saldo nelle spese (o entrate) giuste; quello che avanza resta da classificare. */
+function SplitForm({
+  adjustment,
+  accounts,
+  onSplit,
+  onDelete,
+  onClose,
+}: {
+  adjustment: Transaction;
+  accounts: Account[];
+  onSplit: (id: string, parts: { amount: number; category: string; description: string }[]) => void;
+  onDelete?: (id: string) => void;
+  onClose: () => void;
+}) {
+  const kind: Kind = adjustment.kind === 'entrata' ? 'entrata' : 'uscita';
+  const blank = (): Part => ({ amount: '', category: CATEGORIES[kind][0], description: '' });
+  const [parts, setParts] = useState<Part[]>([blank()]);
+  const [error, setError] = useState('');
+  const set = (i: number, patch: Partial<Part>) => setParts((list) => list.map((p, k) => (k === i ? { ...p, ...patch } : p)));
+  const values = parts.map((p) => (p.amount.trim() ? parseAmount(p.amount) : 0));
+  const used = Math.round(values.reduce((s, v) => s + (v > 0 ? v : 0), 0) * 100) / 100;
+  const left = Math.round((adjustment.amount - used) * 100) / 100;
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const filled = parts.map((p, i) => ({ amount: values[i], category: p.category, description: p.description.trim() })).filter((p) => p.amount !== 0);
+    if (!filled.length) return setError('Inserisci almeno un importo');
+    if (filled.some((p) => !(p.amount > 0))) return setError('Gli importi devono essere maggiori di zero');
+    if (left < 0) return setError(`Hai diviso ${euro(-left)} in più della differenza`);
+    onSplit(adjustment.id, filled);
+    onClose();
+  };
+
+  return (
+    <Modal title="Dividi la differenza" onClose={onClose}>
+      <form onSubmit={submit} className="form">
+        <p className="muted">
+          {kind === 'uscita' ? 'Spese non segnate' : 'Entrate non segnate'} su {accountName(accounts, adjustment.accountId)}, trovate allineando il
+          saldo il {formatDate(adjustment.date)}: <strong>{euro(adjustment.amount)}</strong>. Dividile nelle categorie giuste, anche solo in
+          parte: il resto rimane «Da classificare».
+        </p>
+        {parts.map((p, i) => (
+          <fieldset key={i} className="split-part">
+            <div className="row-2">
+              <Field label="Importo (€)">
+                {(id) => <input id={id} inputMode="decimal" autoFocus={i === 0} placeholder="0,00" value={p.amount} onChange={(e) => set(i, { amount: e.target.value })} />}
+              </Field>
+              <Field label="Categoria">{(id) => <CategorySelect id={id} kind={kind} value={p.category} onChange={(c) => set(i, { category: c })} />}</Field>
+            </div>
+            <Field label="Descrizione (facoltativa)">
+              {(id) => <input id={id} placeholder="Es. Aperitivo" value={p.description} onChange={(e) => set(i, { description: e.target.value })} />}
+            </Field>
+          </fieldset>
+        ))}
+        <div className="split-foot">
+          <button type="button" className="link" onClick={() => setParts((list) => [...list, blank()])}>
+            + Aggiungi un'altra voce
+          </button>
+          <span className={left < 0 ? 'error' : 'muted'} role="status">
+            {left < 0 ? `${euro(-left)} di troppo` : `Restano da dividere ${euro(left)}`}
+          </span>
+        </div>
+        {error && <p className="error">{error}</p>}
+        <div className="form-actions">
+          {onDelete && (
+            <button
+              type="button"
+              className="btn danger-ghost"
+              onClick={() => {
+                if (confirm('Eliminare questa differenza? Il saldo del conto tornerà a non corrispondere a quello reale.')) {
+                  onDelete(adjustment.id);
+                  onClose();
+                }
+              }}
+            >
+              Elimina
+            </button>
+          )}
+          <span className="spacer" />
+          <button type="button" className="btn ghost" onClick={onClose}>
+            Annulla
+          </button>
+          <button type="submit" className="btn primary">
+            Dividi
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+type FormProps = {
+  accounts: Account[];
+  initial?: Transaction;
+  defaultKind?: Kind;
+  defaultDate?: string;
+  defaultAccount?: string;
+  onSave: (t: Omit<Transaction, 'updatedAt'>) => void;
+  onDelete?: (id: string) => void;
+  /** Se presente, le differenze di saldo si aprono nel modulo che le divide. */
+  onSplit?: (id: string, parts: { amount: number; category: string; description: string }[]) => void;
+  onClose: () => void;
+};
+
+export function TransactionForm(props: FormProps) {
+  const { initial, onSplit } = props;
+  if (initial?.adjustment && onSplit) {
+    return <SplitForm adjustment={initial} accounts={props.accounts} onSplit={onSplit} onDelete={props.onDelete} onClose={props.onClose} />;
+  }
+  return <EditForm {...props} />;
+}
+
+function EditForm({
   accounts,
   initial,
   defaultKind = 'uscita',
@@ -18,16 +132,7 @@ export function TransactionForm({
   onSave,
   onDelete,
   onClose,
-}: {
-  accounts: Account[];
-  initial?: Transaction;
-  defaultKind?: Kind;
-  defaultDate?: string;
-  defaultAccount?: string;
-  onSave: (t: Omit<Transaction, 'updatedAt'>) => void;
-  onDelete?: (id: string) => void;
-  onClose: () => void;
-}) {
+}: FormProps) {
   const usable = usableAccounts(accounts, initial?.accountId);
   const firstAccount = (usable.find((a) => a.id === defaultAccount) ?? usable[0] ?? accounts[0]).id;
   const [kind, setKind] = useState<TxKind>(initial?.kind ?? defaultKind);
@@ -196,6 +301,7 @@ export function TransactionList({
                     <span className="list-title with-icon">
                       <span className="truncate">{t.description || t.category}</span>
                       {isFuture(t, now) && <span className="tag">Previsto</span>}
+                      {t.adjustment && <span className="tag">Da dividere</span>}
                     </span>
                     <span className="list-sub">
                       {t.kind === 'trasferimento'
@@ -341,6 +447,7 @@ export function TransactionsView({ store, month }: { store: Store; month: string
           defaultAccount={account || undefined}
           onSave={store.saveTransaction}
           onDelete={store.deleteTransaction}
+          onSplit={store.splitAdjustment}
           onClose={() => setEditing(null)}
         />
       )}

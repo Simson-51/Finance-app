@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { autoPayId, categoryId, COLLECTIONS, defaultStartMonth, emptyData, ensureAccount, merge, normalize, paymentMonth, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, recurringStart, sameData, today, uid } from './finance';
-import type { Account, Collection, Data, Kind, Planned, Recurring, Transaction } from './types';
+import { accountBalance, autoPayId, categoryId, COLLECTIONS, defaultStartMonth, UNCLASSIFIED, emptyData, ensureAccount, merge, normalize, paymentMonth, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, recurringStart, sameData, today, uid } from './finance';
+import type { Account, Collection, Data, Kind, Macro, Planned, Recurring, Transaction } from './types';
 
 const KEY = 'finanze:data';
 
@@ -183,7 +183,67 @@ export function useStore() {
 
     /** Aggiunge una categoria personalizzata (lo stesso nome non crea doppioni). */
     addCategory: useCallback(
-      (kind: Kind, name: string) => update((d) => upsertIn(d, 'categories', { id: categoryId(kind, name), kind, name: name.trim() })),
+      (kind: Kind, name: string, macro?: Macro) => update((d) => upsertIn(d, 'categories', { id: categoryId(kind, name), kind, name: name.trim(), macro })),
+      [update],
+    ),
+    /** Sposta una categoria di spesa (anche predefinita) in un'altra macro-categoria. */
+    setCategoryMacro: useCallback(
+      (name: string, macro: Macro) => update((d) => upsertIn(d, 'categories', { id: categoryId('uscita', name), kind: 'uscita', name, macro })),
+      [update],
+    ),
+    /** Budget mensile dei desideri; undefined lo toglie. */
+    setWantsBudget: useCallback((amount: number | undefined) => update((d) => ({ ...d, settings: { ...d.settings, wantsBudget: amount, updatedAt: now() } })), [update]),
+
+    /**
+     * Allinea il saldo di un conto a quello reale: la differenza diventa un movimento "da
+     * classificare" (uscita se mancano soldi, entrata se ce ne sono di più), da dividere poi
+     * nelle categorie giuste. Una differenza di segno opposto ancora aperta viene prima ridotta.
+     */
+    alignBalance: useCallback(
+      (accountId: string, real: number) =>
+        update((d) => {
+          const account = d.accounts.find((a) => a.id === accountId);
+          if (!account) return d;
+          let diff = Math.round((real - accountBalance(d, account, today())) * 100) / 100;
+          if (!diff) return d;
+          const kind: Kind = diff < 0 ? 'uscita' : 'entrata';
+          let left = Math.abs(diff);
+          let next = d;
+          for (const t of d.transactions.filter((x) => x.adjustment && x.accountId === accountId && x.kind !== kind && x.date <= today())) {
+            if (left <= 0) break;
+            const cut = Math.min(left, t.amount);
+            left = Math.round((left - cut) * 100) / 100;
+            const rest = Math.round((t.amount - cut) * 100) / 100;
+            next = rest > 0 ? patchTransactions(next, (x) => x.id === t.id, (x) => ({ ...x, amount: rest })) : removeFrom(next, 'transactions', [t.id]);
+          }
+          if (left <= 0) return next;
+          return upsertIn(next, 'transactions', {
+            id: uid(),
+            kind,
+            amount: left,
+            date: today(),
+            category: UNCLASSIFIED,
+            description: 'Differenza da allineare',
+            accountId,
+            adjustment: true,
+          });
+        }),
+      [update],
+    ),
+    /** Divide una differenza in movimenti veri; quello che avanza resta da classificare. */
+    splitAdjustment: useCallback(
+      (id: string, parts: { amount: number; category: string; description: string }[]) =>
+        update((d) => {
+          const adj = d.transactions.find((t) => t.id === id);
+          const total = Math.round(parts.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+          if (!adj || !parts.length || total > adj.amount) return d;
+          let next = d;
+          for (const p of parts) {
+            next = upsertIn(next, 'transactions', { id: uid(), kind: adj.kind, amount: p.amount, date: adj.date, category: p.category, description: p.description, accountId: adj.accountId });
+          }
+          const rest = Math.round((adj.amount - total) * 100) / 100;
+          return rest > 0 ? patchTransactions(next, (t) => t.id === id, (t) => ({ ...t, amount: rest })) : removeFrom(next, 'transactions', [id]);
+        }),
       [update],
     ),
     /** Toglie la categoria dagli elenchi; i movimenti che la usano la conservano. */
@@ -199,7 +259,8 @@ export function useStore() {
         update((d) => {
           const at = now();
           const keep = new Set<string>();
-          const fresh = { ...next, deleted: { ...d.deleted, ...next.deleted } };
+          const settings = next.settings ? { ...next.settings, updatedAt: at } : d.settings ? { updatedAt: at } : undefined;
+          const fresh = { ...next, settings, deleted: { ...d.deleted, ...next.deleted } };
           for (const key of COLLECTIONS) {
             (fresh[key] as { id: string; updatedAt: number }[]) = next[key].map((x) => {
               keep.add(x.id);

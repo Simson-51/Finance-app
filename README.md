@@ -14,6 +14,8 @@ App web (installabile anche su telefono e computer come PWA) per gestire le fina
 - **Acquisti in programma**: annota cosa vuoi comprare, il costo, la priorità e la data obiettivo; l'app calcola quanto mettere da parte ogni mese. Quando compri, l'uscita viene registrata.
 - **Spese sicure**: debiti o acquisti già fatti ma non ancora addebitati, anche senza conto o data decisi. Contano negli impegni, nel **disponibile libero** (saldo − spese sicure) e negli avvisi; con "Pagato" diventano un'uscita.
 - **Riepilogo mensile**: entrate, uscite, saldo, previsione di fine mese (con le voci fisse ancora da registrare), spese per categoria e andamento degli ultimi 6 mesi.
+- **Allinea saldo**: scrivi il saldo reale di un conto e l'app registra la differenza come spesa «Da classificare», che puoi dividere nelle categorie giuste quando vuoi.
+- **Bisogni, desideri, risparmio**: ogni categoria confluisce in una macro-categoria; per i desideri imposti un budget mensile e l'app ti avvisa quando stai per raggiungerlo.
 - **Categorie personalizzate**: oltre a quelle predefinite puoi aggiungere le tue dai moduli o dalle Impostazioni.
 - **Backup**: esporta/importa i dati in JSON ed esporta i movimenti in CSV (apribile con Excel); senza sincronizzazione, dopo un mese il riepilogo ricorda di fare un backup.
 - Tema chiaro/scuro, funziona offline.

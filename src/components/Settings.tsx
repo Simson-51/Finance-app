@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { emptyData, parseBackup, toCsv, today } from '../finance';
+import { CATEGORIES, categoriesFor, emptyData, euro, macroOf, MACROS, parseAmount, parseBackup, toCsv, today } from '../finance';
+import type { Macro } from '../types';
 import { download, exportBackup, lastBackup } from '../backup';
 import { askCategory } from './categories';
 import type { Store } from '../store';
@@ -208,6 +209,21 @@ export function SettingsView({
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const { accounts, transactions, recurring, planned, categories } = store.data;
   const [backupAt, setBackupAt] = useState(lastBackup);
+  const savedBudget = store.data.settings?.wantsBudget;
+  const [budget, setBudget] = useState(savedBudget ? String(savedBudget).replace('.', ',') : '');
+  const [budgetMsg, setBudgetMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const saveBudget = () => {
+    if (!budget.trim()) {
+      store.setWantsBudget(undefined);
+      return setBudgetMsg({ ok: true, text: 'Budget tolto: nessun limite per i desideri.' });
+    }
+    const v = parseAmount(budget);
+    if (!(v > 0)) return setBudgetMsg({ ok: false, text: 'Inserisci un importo maggiore di zero, oppure lascia vuoto per togliere il budget.' });
+    store.setWantsBudget(v);
+    setBudgetMsg({ ok: true, text: `Budget salvato: ${euro(v)} al mese. Ti avviso quando arrivi all'80%.` });
+  };
+  const builtIn = new Set([...CATEGORIES.uscita, ...CATEGORIES.entrata].map((c) => c.toLowerCase()));
+  const own = categories.filter((c) => !builtIn.has(c.name.toLowerCase()));
 
   const importFile = async (file: File) => {
     try {
@@ -251,14 +267,58 @@ export function SettingsView({
       </section>
 
       <section className="card settings">
+        <h3>Bisogni, desideri, risparmio</h3>
+        <p className="muted small">
+          Ogni categoria di spesa appartiene a una macro-categoria: <strong>bisogni</strong> (spese necessarie), <strong>desideri</strong> (spese
+          che potresti tagliare) o <strong>risparmio</strong>. Nel risparmio contano anche i trasferimenti verso i conti di tipo «Risparmi».
+        </p>
+        <form
+          className="form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveBudget();
+          }}
+        >
+          <Field label="Budget mensile per i desideri (€)" hint="Il Riepilogo ti avvisa quando stai per raggiungerlo. Lascia vuoto per non avere limiti.">
+            {(id) => <input id={id} inputMode="decimal" placeholder="Es. 200,00" value={budget} onChange={(e) => setBudget(e.target.value)} />}
+          </Field>
+          <div className="button-row">
+            <button type="submit" className="btn primary">
+              Salva budget
+            </button>
+          </div>
+          {budgetMsg && <p className={budgetMsg.ok ? 'success' : 'error'}>{budgetMsg.text}</p>}
+        </form>
+        <details className="howto">
+          <summary>A quale macro-categoria appartiene ogni categoria</summary>
+          <ul className="macro-map">
+            {categoriesFor(categories, 'uscita').map((c) => (
+              <li key={c}>
+                <label>
+                  <span>{c}</span>
+                  <select value={macroOf(categories, c) ?? 'desideri'} onChange={(e) => store.setCategoryMacro(c, e.target.value as Macro)}>
+                    {MACROS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </details>
+      </section>
+
+      <section className="card settings">
         <h3>Categorie</h3>
         <p className="muted small">
           Oltre a quelle predefinite puoi aggiungere le tue, da qui o dalla voce «＋ Nuova categoria…» nei moduli. Se ne togli una, i movimenti
           che la usano la conservano.
         </p>
-        {categories.length > 0 && (
+        {own.length > 0 && (
           <ul className="chips">
-            {[...categories]
+            {[...own]
               .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
               .map((c) => (
                 <li key={c.id} className="chip">

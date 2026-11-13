@@ -5,6 +5,8 @@ import {
   recurringDue,
   isFuture,
   isVisible,
+  MACROS,
+  macroSummary,
   accountBalance,
   addMonths,
   euro,
@@ -52,6 +54,11 @@ export function Dashboard({
   const askBackup = !syncEnabled && !backupAsked && backupDue(data);
   const s = monthSummary(data, month);
   const fc = useForecast(data, payday);
+  const macro = macroSummary(data, month);
+  const macroBase = macro.spent.bisogni + macro.spent.desideri + Math.max(0, macro.spent.risparmio);
+  // differenze di saldo ancora da dividere, di qualsiasi mese
+  const adjustments = data.transactions.filter((t) => t.adjustment && t.date <= today());
+  const toSplit = adjustments.reduce((s, t) => s + (t.kind === 'uscita' ? t.amount : -t.amount), 0);
   const committed = commitments(data);
   const balanceToday = totalBalance(data, today());
   const freeToday = Math.round((balanceToday - committed.total) * 100) / 100;
@@ -86,6 +93,41 @@ export function Dashboard({
   return (
     <div className="view">
       <Alerts store={store} fc={fc} />
+
+      {(adjustments.length > 0 || (isCurrent && macro.wants && macro.wants.state !== 'ok')) && (
+        <div className="alerts">
+          {isCurrent && macro.wants && macro.wants.state !== 'ok' && (
+            <div className="alert warn">
+              <WarnIcon />
+              <div>
+                <strong>{macro.wants.state === 'over' ? 'Budget dei desideri superato' : 'Stai per raggiungere il budget dei desideri'}</strong>
+                <p>
+                  {euro(macro.wants.total)} su {euro(macro.wants.budget)} questo mese
+                  {macro.pending.desideri > 0 && ` (compresi ${euro(macro.pending.desideri)} ancora previsti)`}:{' '}
+                  {macro.wants.left >= 0 ? `restano ${euro(macro.wants.left)}` : `sei oltre di ${euro(-macro.wants.left)}`}.
+                </p>
+              </div>
+            </div>
+          )}
+          {adjustments.length > 0 && (
+            <div className="alert info">
+              <span className="alert-icon" aria-hidden>
+                ?
+              </span>
+              <div>
+                <strong>{euro(Math.abs(toSplit))} da classificare</strong>
+                <p>
+                  {toSplit >= 0 ? 'Spese non segnate' : 'Entrate non segnate'} trovate allineando il saldo: dividile nelle categorie giuste quando
+                  vuoi.
+                </p>
+              </div>
+              <button className="btn primary small" onClick={() => setEditing(adjustments[0])}>
+                Dividi
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {askBackup && (
         <div className="alerts">
@@ -200,6 +242,46 @@ export function Dashboard({
           </p>
         </div>
       )}
+
+      <section className="card macro-card">
+        <div className="card-head">
+          <h3>Bisogni, desideri, risparmio</h3>
+          <button className="link" onClick={() => goTo('impostazioni')}>
+            {macro.wants ? 'Budget' : 'Imposta un budget'}
+          </button>
+        </div>
+        <ul className="bars">
+          {MACROS.map((m) => {
+            const spent = macro.spent[m.id];
+            const w = m.id === 'desideri' ? macro.wants : null;
+            return (
+              <li key={m.id}>
+                <div className="bar-label">
+                  <span>
+                    {m.label} <span className="muted small">· {m.hint}</span>
+                  </span>
+                  <span>
+                    {euro(spent)}
+                    {macroBase > 0 && spent > 0 && <span className="muted"> · {Math.round((spent / macroBase) * 100)}%</span>}
+                  </span>
+                </div>
+                <Progress
+                  value={w ? (w.total / w.budget) * 100 : macroBase > 0 ? (Math.max(0, spent) / macroBase) * 100 : 0}
+                  tone={m.id === 'risparmio' ? 'income' : w && w.state !== 'ok' ? 'expense' : 'accent'}
+                />
+                {w && (
+                  <span className={`small ${w.state === 'ok' ? 'muted' : 'error'}`}>
+                    Budget {euro(w.budget)}
+                    {macro.pending.desideri > 0 && ` · ancora previsti ${euro(macro.pending.desideri)}`} ·{' '}
+                    {w.left >= 0 ? `restano ${euro(w.left)}` : `superato di ${euro(-w.left)}`}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        {macro.unclassified > 0 && <p className="small muted">Più {euro(macro.unclassified)} ancora da classificare.</p>}
+      </section>
 
       <SankeyCard data={data} month={month} />
 
@@ -381,6 +463,7 @@ export function Dashboard({
           defaultDate={defaultDate}
           onSave={store.saveTransaction}
           onDelete={store.deleteTransaction}
+          onSplit={store.splitAdjustment}
           onClose={() => {
             setAdding(null);
             setEditing(null);
