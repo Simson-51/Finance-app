@@ -5,6 +5,8 @@ import {
   recurringDue,
   isFuture,
   isVisible,
+  MACROS,
+  macroSummary,
   accountBalance,
   addMonths,
   euro,
@@ -12,6 +14,7 @@ import {
   formatMonth,
   monthOf,
   monthSummary,
+  overdueRecurring,
   plannedProgress,
   recurringDate,
   recurringPayment,
@@ -28,13 +31,34 @@ import { Alerts, shortfallText, useForecast, WarnIcon } from './Alerts';
 import { SankeyCard } from './Sankey';
 import { BalanceChart } from './BalanceChart';
 import { Empty, Progress } from './ui';
+import { backupDue, exportBackup, snoozeBackup } from '../backup';
 
-export function Dashboard({ store, month, payday, goTo }: { store: Store; month: string; payday: number; goTo: (t: Tab) => void }) {
+export function Dashboard({
+  store,
+  month,
+  payday,
+  goTo,
+  syncEnabled,
+}: {
+  store: Store;
+  month: string;
+  payday: number;
+  goTo: (t: Tab) => void;
+  syncEnabled: boolean;
+}) {
   const { data } = store;
   const [adding, setAdding] = useState<Kind | null>(null);
   const [editing, setEditing] = useState<Transaction | null>(null);
+  // promemoria del backup: solo senza sincronizzazione, che è già una copia online
+  const [backupAsked, setBackupAsked] = useState(false);
+  const askBackup = !syncEnabled && !backupAsked && backupDue(data);
   const s = monthSummary(data, month);
   const fc = useForecast(data, payday);
+  const macro = macroSummary(data, month);
+  const macroBase = macro.spent.bisogni + macro.spent.desideri + Math.max(0, macro.spent.risparmio);
+  // differenze di saldo ancora da dividere, di qualsiasi mese
+  const adjustments = data.transactions.filter((t) => t.adjustment && t.date <= today());
+  const toSplit = adjustments.reduce((s, t) => s + (t.kind === 'uscita' ? t.amount : -t.amount), 0);
   const committed = commitments(data);
   const balanceToday = totalBalance(data, today());
   const freeToday = Math.round((balanceToday - committed.total) * 100) / 100;
@@ -50,6 +74,8 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   const due = data.recurring
     .filter((r) => recurringDue(r, month) && !recurringPayment(data.transactions, r, month))
     .sort((a, b) => a.day - b.day);
+  // nel mese in corso si vedono anche le voci dei mesi passati mai registrate
+  const overdue = isCurrent ? overdueRecurring(data) : [];
   const planned = sortPlanned(data.planned.filter((p) => !p.boughtDate && !p.committed)).slice(0, 3);
   const recent = transactionsIn(data.transactions, month)
     .filter((t) => isVisible(t) && !isFuture(t))
@@ -67,6 +93,75 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   return (
     <div className="view">
       <Alerts store={store} fc={fc} />
+
+      {(adjustments.length > 0 || (isCurrent && macro.wants && macro.wants.state !== 'ok')) && (
+        <div className="alerts">
+          {isCurrent && macro.wants && macro.wants.state !== 'ok' && (
+            <div className="alert warn">
+              <WarnIcon />
+              <div>
+                <strong>{macro.wants.state === 'over' ? 'Budget dei desideri superato' : 'Stai per raggiungere il budget dei desideri'}</strong>
+                <p>
+                  {euro(macro.wants.total)} su {euro(macro.wants.budget)} questo mese
+                  {macro.pending.desideri > 0 && ` (compresi ${euro(macro.pending.desideri)} ancora previsti)`}:{' '}
+                  {macro.wants.left >= 0 ? `restano ${euro(macro.wants.left)}` : `sei oltre di ${euro(-macro.wants.left)}`}.
+                </p>
+              </div>
+            </div>
+          )}
+          {adjustments.length > 0 && (
+            <div className="alert info">
+              <span className="alert-icon" aria-hidden>
+                ?
+              </span>
+              <div>
+                <strong>{euro(Math.abs(toSplit))} da classificare</strong>
+                <p>
+                  {toSplit >= 0 ? 'Spese non segnate' : 'Entrate non segnate'} trovate allineando il saldo: dividile nelle categorie giuste quando
+                  vuoi.
+                </p>
+              </div>
+              <button className="btn primary small" onClick={() => setEditing(adjustments[0])}>
+                Dividi
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {askBackup && (
+        <div className="alerts">
+          <div className="alert info backup-alert">
+            <span className="alert-icon" aria-hidden>
+              💾
+            </span>
+            <div>
+              <strong>È ora di fare un backup</strong>
+              <p>I dati sono salvati solo su questo dispositivo: scarica una copia per non perderli.</p>
+              <div className="button-row">
+                <button
+                  className="btn primary small"
+                  onClick={() => {
+                    exportBackup(JSON.stringify(data, null, 2));
+                    setBackupAsked(true);
+                  }}
+                >
+                  Esporta backup
+                </button>
+                <button
+                  className="btn ghost small"
+                  onClick={() => {
+                    snoozeBackup();
+                    setBackupAsked(true);
+                  }}
+                >
+                  Più tardi
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="quick-add">
         <button className="btn income" onClick={() => setAdding('entrata')}>
@@ -141,12 +236,52 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
             <strong className={s.forecast >= 0 ? 'big amount entrata' : 'big amount uscita'}>{euro(s.forecast)}</strong>
           </div>
           <p className="small muted">
-            Considerando i movimenti previsti e le voci mensili non ancora registrate
+            Considerando i movimenti previsti, le voci mensili non ancora registrate e le spese sicure
             {s.pendingExpenses > 0 && <> (−{euro(s.pendingExpenses)} di spese</>}
             {s.pendingIncome > 0 && <>{s.pendingExpenses > 0 ? ', ' : ' ('}+{euro(s.pendingIncome)} di entrate</>})
           </p>
         </div>
       )}
+
+      <section className="card macro-card">
+        <div className="card-head">
+          <h3>Bisogni, desideri, risparmio</h3>
+          <button className="link" onClick={() => goTo('impostazioni')}>
+            {macro.wants ? 'Budget' : 'Imposta un budget'}
+          </button>
+        </div>
+        <ul className="bars">
+          {MACROS.map((m) => {
+            const spent = macro.spent[m.id];
+            const w = m.id === 'desideri' ? macro.wants : null;
+            return (
+              <li key={m.id}>
+                <div className="bar-label">
+                  <span>
+                    {m.label} <span className="muted small">· {m.hint}</span>
+                  </span>
+                  <span>
+                    {euro(spent)}
+                    {macroBase > 0 && spent > 0 && <span className="muted"> · {Math.round((spent / macroBase) * 100)}%</span>}
+                  </span>
+                </div>
+                <Progress
+                  value={w ? (w.total / w.budget) * 100 : macroBase > 0 ? (Math.max(0, spent) / macroBase) * 100 : 0}
+                  tone={m.id === 'risparmio' ? 'income' : w && w.state !== 'ok' ? 'expense' : 'accent'}
+                />
+                {w && (
+                  <span className={`small ${w.state === 'ok' ? 'muted' : 'error'}`}>
+                    Budget {euro(w.budget)}
+                    {macro.pending.desideri > 0 && ` · ancora previsti ${euro(macro.pending.desideri)}`} ·{' '}
+                    {w.left >= 0 ? `restano ${euro(w.left)}` : `superato di ${euro(-w.left)}`}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        {macro.unclassified > 0 && <p className="small muted">Più {euro(macro.unclassified)} ancora da classificare.</p>}
+      </section>
 
       <SankeyCard data={data} month={month} />
 
@@ -235,10 +370,20 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
           </div>
           {data.recurring.length === 0 ? (
             <p className="muted small">Nessuna spesa mensile impostata.</p>
-          ) : due.length === 0 ? (
+          ) : due.length === 0 && overdue.length === 0 ? (
             <p className="muted small">✓ Tutto registrato per questo mese.</p>
           ) : (
             <ul className="mini-list">
+              {overdue.map(({ recurring: r, month: m, date }) => (
+                <li key={`${r.id}-${m}`}>
+                  <button className="tick" aria-label={`Segna ${r.name} di ${formatMonth(m).toLowerCase()} come registrata`} onClick={() => store.toggleRecurringPaid(r, m)} />
+                  <span className="list-main">
+                    <span className="list-title">{r.name}</span>
+                    <span className="list-sub error">Non registrata · {formatDate(date)}</span>
+                  </span>
+                  <span className={`amount ${r.kind}`}>{euro(r.amount)}</span>
+                </li>
+              ))}
               {due.map((r) => {
                 const date = recurringDate(r, month);
                 const late = isCurrent && date < today() && r.kind === 'uscita';
@@ -318,6 +463,7 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
           defaultDate={defaultDate}
           onSave={store.saveTransaction}
           onDelete={store.deleteTransaction}
+          onSplit={store.splitAdjustment}
           onClose={() => {
             setAdding(null);
             setEditing(null);

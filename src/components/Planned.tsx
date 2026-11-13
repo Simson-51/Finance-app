@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { ACCOUNT_TYPES, accountName, CATEGORIES, commitments, euro, formatDate, parseAmount, plannedProgress, sortPlanned, sum, today, uid, usableAccounts } from '../finance';
+import { ACCOUNT_TYPES, accountName, commitments, euro, formatDate, parseAmount, plannedProgress, sortPlanned, sum, today, uid, usableAccounts } from '../finance';
 import type { Store } from '../store';
 import type { Account, Planned, Priority } from '../types';
 import { AccountSelect } from './Accounts';
 import { Empty, Field, Modal, Progress } from './ui';
+import { CategorySelect } from './categories';
 
 const PRIORITIES: Priority[] = ['alta', 'media', 'bassa'];
 const toInput = (n: number) => (n ? String(n).replace('.', ',') : '');
@@ -109,13 +110,7 @@ function PlannedForm({
                 {(id) => <input id={id} type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />}
               </Field>
               <Field label="Categoria">
-                {(id) => (
-                  <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
-                    {CATEGORIES.uscita.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                )}
+                {(id) => <CategorySelect id={id} kind="uscita" value={category} onChange={setCategory} />}
               </Field>
             </div>
           </>
@@ -134,13 +129,7 @@ function PlannedForm({
                 {(id) => <input id={id} type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />}
               </Field>
               <Field label="Categoria">
-                {(id) => (
-                  <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
-                    {CATEGORIES.uscita.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                )}
+                {(id) => <CategorySelect id={id} kind="uscita" value={category} onChange={setCategory} />}
               </Field>
             </div>
             <div className="field">

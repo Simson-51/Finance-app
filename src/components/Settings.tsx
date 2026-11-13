@@ -1,18 +1,12 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { emptyData, parseBackup, toCsv, today } from '../finance';
+import { CATEGORIES, categoriesFor, emptyData, euro, macroOf, MACROS, parseAmount, parseBackup, toCsv, today } from '../finance';
+import type { Macro } from '../types';
+import { download, exportBackup, lastBackup } from '../backup';
+import { askCategory } from './categories';
 import type { Store } from '../store';
 import type { Sync } from '../useSync';
 import { Field } from './ui';
 import { enableNotifications, needsHomeScreen, notificationsEnabled, notificationsSupported, setNotificationsPref } from '../notify';
-
-function download(name: string, content: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 export type Theme = 'auto' | 'light' | 'dark';
 
@@ -213,7 +207,23 @@ export function SettingsView({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const { accounts, transactions, recurring, planned } = store.data;
+  const { accounts, transactions, recurring, planned, categories } = store.data;
+  const [backupAt, setBackupAt] = useState(lastBackup);
+  const savedBudget = store.data.settings?.wantsBudget;
+  const [budget, setBudget] = useState(savedBudget ? String(savedBudget).replace('.', ',') : '');
+  const [budgetMsg, setBudgetMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const saveBudget = () => {
+    if (!budget.trim()) {
+      store.setWantsBudget(undefined);
+      return setBudgetMsg({ ok: true, text: 'Budget tolto: nessun limite per i desideri.' });
+    }
+    const v = parseAmount(budget);
+    if (!(v > 0)) return setBudgetMsg({ ok: false, text: 'Inserisci un importo maggiore di zero, oppure lascia vuoto per togliere il budget.' });
+    store.setWantsBudget(v);
+    setBudgetMsg({ ok: true, text: `Budget salvato: ${euro(v)} al mese. Ti avviso quando arrivi all'80%.` });
+  };
+  const builtIn = new Set([...CATEGORIES.uscita, ...CATEGORIES.entrata].map((c) => c.toLowerCase()));
+  const own = categories.filter((c) => !builtIn.has(c.name.toLowerCase()));
 
   const importFile = async (file: File) => {
     try {
@@ -257,6 +267,88 @@ export function SettingsView({
       </section>
 
       <section className="card settings">
+        <h3>Bisogni, desideri, risparmio</h3>
+        <p className="muted small">
+          Ogni categoria di spesa appartiene a una macro-categoria: <strong>bisogni</strong> (spese necessarie), <strong>desideri</strong> (spese
+          che potresti tagliare) o <strong>risparmio</strong>. Nel risparmio contano anche i trasferimenti verso i conti di tipo «Risparmi».
+        </p>
+        <form
+          className="form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveBudget();
+          }}
+        >
+          <Field label="Budget mensile per i desideri (€)" hint="Il Riepilogo ti avvisa quando stai per raggiungerlo. Lascia vuoto per non avere limiti.">
+            {(id) => <input id={id} inputMode="decimal" placeholder="Es. 200,00" value={budget} onChange={(e) => setBudget(e.target.value)} />}
+          </Field>
+          <div className="button-row">
+            <button type="submit" className="btn primary">
+              Salva budget
+            </button>
+          </div>
+          {budgetMsg && <p className={budgetMsg.ok ? 'success' : 'error'}>{budgetMsg.text}</p>}
+        </form>
+        <details className="howto">
+          <summary>A quale macro-categoria appartiene ogni categoria</summary>
+          <ul className="macro-map">
+            {categoriesFor(categories, 'uscita').map((c) => (
+              <li key={c}>
+                <label>
+                  <span>{c}</span>
+                  <select value={macroOf(categories, c) ?? 'desideri'} onChange={(e) => store.setCategoryMacro(c, e.target.value as Macro)}>
+                    {MACROS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </details>
+      </section>
+
+      <section className="card settings">
+        <h3>Categorie</h3>
+        <p className="muted small">
+          Oltre a quelle predefinite puoi aggiungere le tue, da qui o dalla voce «＋ Nuova categoria…» nei moduli. Se ne togli una, i movimenti
+          che la usano la conservano.
+        </p>
+        {own.length > 0 && (
+          <ul className="chips">
+            {[...own]
+              .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+              .map((c) => (
+                <li key={c.id} className="chip">
+                  <span>
+                    {c.name} <span className="muted">· {c.kind === 'uscita' ? 'spesa' : 'entrata'}</span>
+                  </span>
+                  <button
+                    className="chip-x"
+                    aria-label={`Togli la categoria ${c.name}`}
+                    onClick={() => {
+                      if (confirm(`Togliere la categoria “${c.name}” dagli elenchi? I movimenti non vengono toccati.`)) store.deleteCategory(c.id);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+          </ul>
+        )}
+        <div className="button-row">
+          <button className="btn ghost" onClick={() => askCategory(categories, 'uscita', store.addCategory)}>
+            + Categoria di spesa
+          </button>
+          <button className="btn ghost" onClick={() => askCategory(categories, 'entrata', store.addCategory)}>
+            + Categoria di entrata
+          </button>
+        </div>
+      </section>
+
+      <section className="card settings">
         <h3>Aspetto</h3>
         <div className="segmented" role="radiogroup" aria-label="Tema">
           {(['auto', 'light', 'dark'] as Theme[]).map((t) => (
@@ -274,10 +366,16 @@ export function SettingsView({
           <br />
           {sync.enabled
             ? 'Con la sincronizzazione attiva i dati sono già salvati online; un backup in più non guasta.'
-            : 'I dati sono salvati solo in questo browser: esporta regolarmente un backup per non perderli.'}
+            : 'I dati sono salvati solo in questo browser: esporta regolarmente un backup per non perderli (dopo un mese te lo ricorda il Riepilogo).'}
+          <br />
+          Ultimo backup: {backupAt ? new Date(backupAt).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' }) : 'mai fatto da questo dispositivo'}.
         </p>
         <div className="button-row">
-          <button className="btn primary" onClick={() => download(`finanze-backup-${today()}.json`, JSON.stringify(store.data, null, 2), 'application/json')}>
+          <button className="btn primary" onClick={() => {
+              exportBackup(JSON.stringify(store.data, null, 2));
+              setBackupAt(Date.now());
+            }}
+          >
             Esporta backup
           </button>
           <button className="btn ghost" onClick={() => fileRef.current?.click()}>

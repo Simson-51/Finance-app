@@ -52,6 +52,11 @@ export interface Transaction extends Synced {
   plannedId?: string;
   /** Ricarica registrata automaticamente per mantenere il budget minimo di un conto. */
   autoTopUp?: boolean;
+  /**
+   * Differenza trovata allineando il saldo del conto a quello reale: soldi spesi (o entrati)
+   * e mai segnati, ancora da dividere nelle categorie giuste.
+   */
+  adjustment?: boolean;
 }
 
 /** Voce che si ripete ogni mese (affitto, bollette, abbonamenti, stipendio...). */
@@ -102,14 +107,38 @@ export interface Planned extends Synced {
   accountId?: string;
 }
 
+/** Macro-categoria delle spese: cose necessarie, cose che si possono tagliare, soldi messi da parte. */
+export type Macro = 'bisogni' | 'desideri' | 'risparmio';
+
+/**
+ * Categoria aggiunta dall'utente, oltre a quelle predefinite. Un record con il nome di una
+ * categoria predefinita serve solo a cambiarne la macro-categoria.
+ */
+export interface Category extends Synced {
+  kind: Kind;
+  name: string;
+  /** Macro-categoria scelta dall'utente; se assente vale quella predefinita. */
+  macro?: Macro;
+}
+
+/** Impostazioni che viaggiano con i dati (backup e sincronizzazione). */
+export interface Settings {
+  /** Budget mensile per i desideri; assente = nessun limite. */
+  wantsBudget?: number;
+  updatedAt: number;
+}
+
 export interface Data {
   version: 2;
   accounts: Account[];
   transactions: Transaction[];
   recurring: Recurring[];
   planned: Planned[];
+  /** Categorie personalizzate. */
+  categories: Category[];
+  settings?: Settings;
   /** Record eliminati (id → momento dell'eliminazione), per propagare le eliminazioni tra dispositivi. */
   deleted: Record<string, number>;
 }
 
-export type Collection = 'accounts' | 'transactions' | 'recurring' | 'planned';
+export type Collection = 'accounts' | 'transactions' | 'recurring' | 'planned' | 'categories';

@@ -70,6 +70,13 @@ describe('parseAmount', () => {
     expect(parseAmount('-20')).toBe(-20);
   });
 
+  it('senza virgola legge il punto seguito da tre cifre come migliaia', () => {
+    expect(parseAmount('1.500')).toBe(1500);
+    expect(parseAmount('1.234.567')).toBe(1234567);
+    expect(parseAmount('12.5')).toBe(12.5);
+    expect(parseAmount('0.500')).toBe(0.5);
+  });
+
   it('rifiuta testo non numerico', () => {
     expect(parseAmount('')).toBeNaN();
     expect(parseAmount('abc')).toBeNaN();

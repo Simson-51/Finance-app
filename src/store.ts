@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { emptyData, ensureAccount, merge, normalize, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, sameData, today, uid } from './finance';
-import type { Account, Collection, Data, Planned, Recurring, Transaction } from './types';
+import { accountBalance, autoPayId, categoryId, COLLECTIONS, defaultStartMonth, UNCLASSIFIED, emptyData, ensureAccount, merge, normalize, paymentMonth, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, recurringStart, sameData, today, uid } from './finance';
+import type { Account, Collection, Data, Kind, Macro, Planned, Recurring, Transaction } from './types';
 
 const KEY = 'finanze:data';
 
@@ -32,6 +32,18 @@ function removeFrom(d: Data, key: Collection, ids: string[]): Data {
   const deleted = { ...d.deleted };
   for (const id of ids) deleted[id] = at;
   return { ...d, [key]: (d[key] as { id: string }[]).filter((x) => !ids.includes(x.id)), deleted };
+}
+
+/**
+ * Elimina dei movimenti. Se uno registrava una voce mensile, segna come eliminato anche il
+ * pagamento automatico di quel mese: altrimenti l'app lo registrerebbe di nuovo subito.
+ */
+function removeTransactions(d: Data, ids: string[]): Data {
+  const next = removeFrom(d, 'transactions', ids);
+  for (const t of d.transactions) {
+    if (t.recurringId && ids.includes(t.id)) next.deleted[autoPayId(t.recurringId, paymentMonth(t))] = next.deleted[t.id];
+  }
+  return next;
 }
 
 /** Modifica i movimenti che soddisfano `match`, aggiornandone la data di modifica. */
@@ -93,9 +105,17 @@ export function useStore() {
     ),
 
     saveTransaction: useCallback((t: Draft<Transaction>) => update((d) => upsertIn(d, 'transactions', t)), [update]),
-    deleteTransaction: useCallback((id: string) => update((d) => removeFrom(d, 'transactions', [id])), [update]),
+    deleteTransaction: useCallback((id: string) => update((d) => removeTransactions(d, [id])), [update]),
 
-    saveRecurring: useCallback((r: Draft<Recurring>) => update((d) => upsertIn(d, 'recurring', r)), [update]),
+    saveRecurring: useCallback(
+      (r: Draft<Recurring>) =>
+        update((d) => {
+          // una voce senza primo addebito lo dedurrebbe dall'ultima modifica: lo si fissa prima di cambiarla
+          const old = d.recurring.find((x) => x.id === r.id);
+          return upsertIn(d, 'recurring', { ...r, startMonth: r.startMonth ?? (old ? recurringStart(old) : defaultStartMonth(r.day)) });
+        }),
+      [update],
+    ),
     deleteRecurring: useCallback(
       // I movimenti già registrati restano, ma non sono più collegati alla voce eliminata.
       (id: string) =>
@@ -109,7 +129,7 @@ export function useStore() {
       (r: Recurring, month: string) =>
         update((d) => {
           const existing = recurringPayment(d.transactions, r, month);
-          if (existing) return removeFrom(d, 'transactions', [existing.id]);
+          if (existing) return removeTransactions(d, [existing.id]);
           const account = d.accounts.find((a) => a.id === r.accountId && !a.archived) ?? d.accounts.find((a) => !a.archived) ?? d.accounts[0];
           return upsertIn(d, 'transactions', {
             id: uid(),
@@ -137,7 +157,7 @@ export function useStore() {
     markBought: useCallback(
       (p: Planned, amount: number, accountId: string, date = today()) =>
         update((d) => {
-          const next = upsertIn(d, 'planned', { ...p, boughtDate: date, saved: amount });
+          const next = upsertIn(d, 'planned', { ...p, boughtDate: date });
           return upsertIn(next, 'transactions', {
             id: uid(),
             kind: 'uscita',
@@ -161,6 +181,74 @@ export function useStore() {
       [update],
     ),
 
+    /** Aggiunge una categoria personalizzata (lo stesso nome non crea doppioni). */
+    addCategory: useCallback(
+      (kind: Kind, name: string, macro?: Macro) => update((d) => upsertIn(d, 'categories', { id: categoryId(kind, name), kind, name: name.trim(), macro })),
+      [update],
+    ),
+    /** Sposta una categoria di spesa (anche predefinita) in un'altra macro-categoria. */
+    setCategoryMacro: useCallback(
+      (name: string, macro: Macro) => update((d) => upsertIn(d, 'categories', { id: categoryId('uscita', name), kind: 'uscita', name, macro })),
+      [update],
+    ),
+    /** Budget mensile dei desideri; undefined lo toglie. */
+    setWantsBudget: useCallback((amount: number | undefined) => update((d) => ({ ...d, settings: { ...d.settings, wantsBudget: amount, updatedAt: now() } })), [update]),
+
+    /**
+     * Allinea il saldo di un conto a quello reale: la differenza diventa un movimento "da
+     * classificare" (uscita se mancano soldi, entrata se ce ne sono di più), da dividere poi
+     * nelle categorie giuste. Una differenza di segno opposto ancora aperta viene prima ridotta.
+     */
+    alignBalance: useCallback(
+      (accountId: string, real: number) =>
+        update((d) => {
+          const account = d.accounts.find((a) => a.id === accountId);
+          if (!account) return d;
+          let diff = Math.round((real - accountBalance(d, account, today())) * 100) / 100;
+          if (!diff) return d;
+          const kind: Kind = diff < 0 ? 'uscita' : 'entrata';
+          let left = Math.abs(diff);
+          let next = d;
+          for (const t of d.transactions.filter((x) => x.adjustment && x.accountId === accountId && x.kind !== kind && x.date <= today())) {
+            if (left <= 0) break;
+            const cut = Math.min(left, t.amount);
+            left = Math.round((left - cut) * 100) / 100;
+            const rest = Math.round((t.amount - cut) * 100) / 100;
+            next = rest > 0 ? patchTransactions(next, (x) => x.id === t.id, (x) => ({ ...x, amount: rest })) : removeFrom(next, 'transactions', [t.id]);
+          }
+          if (left <= 0) return next;
+          return upsertIn(next, 'transactions', {
+            id: uid(),
+            kind,
+            amount: left,
+            date: today(),
+            category: UNCLASSIFIED,
+            description: 'Differenza da allineare',
+            accountId,
+            adjustment: true,
+          });
+        }),
+      [update],
+    ),
+    /** Divide una differenza in movimenti veri; quello che avanza resta da classificare. */
+    splitAdjustment: useCallback(
+      (id: string, parts: { amount: number; category: string; description: string }[]) =>
+        update((d) => {
+          const adj = d.transactions.find((t) => t.id === id);
+          const total = Math.round(parts.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+          if (!adj || !parts.length || total > adj.amount) return d;
+          let next = d;
+          for (const p of parts) {
+            next = upsertIn(next, 'transactions', { id: uid(), kind: adj.kind, amount: p.amount, date: adj.date, category: p.category, description: p.description, accountId: adj.accountId });
+          }
+          const rest = Math.round((adj.amount - total) * 100) / 100;
+          return rest > 0 ? patchTransactions(next, (t) => t.id === id, (t) => ({ ...t, amount: rest })) : removeFrom(next, 'transactions', [id]);
+        }),
+      [update],
+    ),
+    /** Toglie la categoria dagli elenchi; i movimenti che la usano la conservano. */
+    deleteCategory: useCallback((id: string) => update((d) => removeFrom(d, 'categories', [id])), [update]),
+
     /**
      * Sostituisce tutti i dati (import di un backup o azzeramento). Tutto ciò che non è nei
      * nuovi dati viene segnato come eliminato e i nuovi record diventano i più recenti,
@@ -171,8 +259,9 @@ export function useStore() {
         update((d) => {
           const at = now();
           const keep = new Set<string>();
-          const fresh = { ...next, deleted: { ...d.deleted, ...next.deleted } };
-          for (const key of ['accounts', 'transactions', 'recurring', 'planned'] as const) {
+          const settings = next.settings ? { ...next.settings, updatedAt: at } : d.settings ? { updatedAt: at } : undefined;
+          const fresh = { ...next, settings, deleted: { ...d.deleted, ...next.deleted } };
+          for (const key of COLLECTIONS) {
             (fresh[key] as { id: string; updatedAt: number }[]) = next[key].map((x) => {
               keep.add(x.id);
               return { ...x, updatedAt: at };

@@ -1,4 +1,4 @@
-import type { Account, AccountType, Collection, Data, Kind, Planned, Recurring, Transaction } from './types';
+import type { Account, AccountType, Category, Collection, Data, Kind, Macro, Planned, Recurring, Transaction } from './types';
 
 export const CATEGORIES: Record<Kind, string[]> = {
   entrata: ['Stipendio', 'Freelance', 'Rimborsi', 'Regali', 'Investimenti', 'Altro'],
@@ -47,8 +47,100 @@ export const emptyData = (): Data => ({
   transactions: [],
   recurring: [],
   planned: [],
+  categories: [],
   deleted: {},
 });
+
+/** Id fisso di una categoria personalizzata: lo stesso nome su due dispositivi dà lo stesso record. */
+export const categoryId = (kind: Kind, name: string) => `cat-${kind}-${name.trim().toLowerCase()}`;
+
+/** Categoria delle differenze di saldo non ancora divise nelle spese giuste. */
+export const UNCLASSIFIED = 'Da classificare';
+
+export const MACROS: { id: Macro; label: string; hint: string }[] = [
+  { id: 'bisogni', label: 'Bisogni', hint: 'necessari' },
+  { id: 'desideri', label: 'Desideri', hint: 'tagliabili' },
+  { id: 'risparmio', label: 'Risparmio', hint: 'messo da parte' },
+];
+
+const NEEDS = ['casa', 'bollette', 'spesa', 'trasporti', 'salute', 'istruzione'];
+
+/**
+ * Macro-categoria di una categoria di spesa: quella scelta dall'utente, altrimenti i bisogni per
+ * le spese necessarie predefinite e i desideri per tutto il resto. Le differenze ancora da
+ * classificare non ne hanno una.
+ */
+export function macroOf(custom: Category[], category: string): Macro | null {
+  if (category === UNCLASSIFIED) return null;
+  const key = category.toLowerCase();
+  const own = custom.find((c) => c.kind === 'uscita' && c.name.toLowerCase() === key)?.macro;
+  return own ?? (NEEDS.includes(key) ? 'bisogni' : 'desideri');
+}
+
+/** Da questa quota del budget dei desideri parte l'avviso. */
+export const BUDGET_WARN_AT = 0.8;
+
+export interface MacroSummary {
+  /** Già speso nel mese per macro-categoria (il risparmio comprende i trasferimenti verso i conti di risparmio). */
+  spent: Record<Macro, number>;
+  /** Ancora previsto nel mese: movimenti futuri e voci mensili non registrate. */
+  pending: Record<Macro, number>;
+  /** Differenze di saldo non ancora divise. */
+  unclassified: number;
+  /** Stato del budget dei desideri, se impostato. */
+  wants: { budget: number; total: number; left: number; state: 'ok' | 'near' | 'over' } | null;
+}
+
+export function macroSummary(data: Data, month: string, asOf = today()): MacroSummary {
+  const spent: Record<Macro, number> = { bisogni: 0, desideri: 0, risparmio: 0 };
+  const pending: Record<Macro, number> = { bisogni: 0, desideri: 0, risparmio: 0 };
+  let unclassified = 0;
+  const savings = new Set(data.accounts.filter((a) => a.type === 'risparmio').map((a) => a.id));
+  for (const t of transactionsIn(data.transactions, month)) {
+    const bucket = t.date <= asOf ? spent : pending;
+    if (t.kind === 'trasferimento') {
+      // soldi spostati su un conto di risparmio (o ripresi da lì)
+      const into = Number(savings.has(t.toAccountId ?? '')) - Number(savings.has(t.accountId));
+      bucket.risparmio += into * t.amount;
+    } else if (t.kind === 'uscita') {
+      const m = macroOf(data.categories, t.category);
+      if (m) bucket[m] += t.amount;
+      else unclassified += t.amount;
+    }
+  }
+  for (const r of data.recurring) {
+    if (r.kind !== 'uscita' || !recurringDue(r, month) || recurringPayment(data.transactions, r, month)) continue;
+    const m = macroOf(data.categories, r.category);
+    if (m) pending[m] += r.amount;
+  }
+  for (const m of MACROS) {
+    spent[m.id] = round(spent[m.id]);
+    pending[m.id] = round(pending[m.id]);
+  }
+  const budget = data.settings?.wantsBudget;
+  const total = round(spent.desideri + pending.desideri);
+  const wants = budget && budget > 0
+    ? { budget, total, left: round(budget - total), state: total > budget ? ('over' as const) : total >= budget * BUDGET_WARN_AT ? ('near' as const) : ('ok' as const) }
+    : null;
+  return { spent, pending, unclassified: round(unclassified), wants };
+}
+
+/**
+ * Categorie tra cui scegliere: quelle predefinite più quelle dell'utente ("Altro" resta in fondo).
+ * `keep` aggiunge in cima una categoria non più in elenco (es. eliminata) usata dal record che si modifica.
+ */
+export function categoriesFor(custom: Category[], kind: Kind, keep?: string): string[] {
+  const base = CATEGORIES[kind];
+  const seen = new Set(base.map((c) => c.toLowerCase()));
+  const extra: string[] = [];
+  for (const c of [...custom].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (c.kind !== kind || seen.has(c.name.toLowerCase())) continue;
+    seen.add(c.name.toLowerCase());
+    extra.push(c.name);
+  }
+  const list = [...base.slice(0, -1), ...extra, base[base.length - 1]];
+  return keep && !seen.has(keep.toLowerCase()) ? [keep, ...list] : list;
+}
 
 export const uid = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -188,9 +280,18 @@ export function reconcileAutoPay(data: Data, day = today(), now = Date.now()): D
   return added.length ? { ...data, transactions: [...data.transactions, ...added] } : data;
 }
 
+/**
+ * Mese a cui si riferisce il pagamento di una voce mensile: quello della sua data, tranne per i
+ * pagamenti automatici, che restano legati al loro mese anche se poi se ne cambia la data.
+ */
+export function paymentMonth(t: Transaction): string {
+  const prefix = `autopay-${t.recurringId}-`;
+  return t.recurringId && t.id.startsWith(prefix) ? t.id.slice(prefix.length) : monthOf(t.date);
+}
+
 /** Il movimento che registra la voce mensile in quel mese, se esiste. */
 export const recurringPayment = (txs: Transaction[], r: Recurring, month: string) =>
-  txs.find((t) => t.recurringId === r.id && monthOf(t.date) === month);
+  txs.find((t) => t.recurringId === r.id && paymentMonth(t) === month);
 
 export interface MonthSummary {
   /** Entrate e uscite già avvenute (data fino a oggi). */
@@ -216,7 +317,11 @@ export function monthSummary(data: Data, month: string, asOf = today()): MonthSu
   const active = data.recurring.filter((r) => recurringDue(r, month));
   const pending = active.filter((r) => !recurringPayment(data.transactions, r, month));
   const pendingIncome = round(sum(pending.filter((r) => r.kind === 'entrata')) + sum(future.filter((t) => t.kind === 'entrata')));
-  const commitments = openCommitments(data).filter((p) => p.targetDate && monthOf(p.targetDate) === month && p.targetDate > asOf);
+  // spese sicure: nel mese in corso anche quelle senza data o con data passata (da pagare da subito)
+  const current = month === monthOf(asOf);
+  const commitments = openCommitments(data).filter((p) =>
+    current ? !p.targetDate || monthOf(p.targetDate) <= month : !!p.targetDate && monthOf(p.targetDate) === month && month > monthOf(asOf),
+  );
   const pendingExpenses = round(
     sum(pending.filter((r) => r.kind === 'uscita')) + sum(future.filter((t) => t.kind === 'uscita')) + sum(commitments.map((p) => ({ amount: p.cost }))),
   );
@@ -379,6 +484,24 @@ export const dayBefore = (date: string) => {
   return today(new Date(y, m - 1, d - 1));
 };
 
+/** Quanti mesi indietro si cercano le voci mensili scadute e mai registrate. */
+export const OVERDUE_MONTHS = 3;
+
+/** Le voci importate da versioni molto vecchie non hanno un inizio noto: per loro non si guarda ai mesi passati. */
+const hasKnownStart = (r: Recurring) => !!r.startMonth || r.updatedAt > 0;
+
+/** Voci mensili dei mesi passati (fino a `OVERDUE_MONTHS`) non ancora registrate, dalla più vecchia. */
+export function overdueRecurring(data: Pick<Data, 'recurring' | 'transactions'>, day = today()): { recurring: Recurring; month: string; date: string }[] {
+  const out: { recurring: Recurring; month: string; date: string }[] = [];
+  for (let i = OVERDUE_MONTHS; i >= 1; i--) {
+    const month = addMonths(monthOf(day), -i);
+    for (const r of data.recurring) {
+      if (hasKnownStart(r) && recurringDue(r, month) && !recurringPayment(data.transactions, r, month)) out.push({ recurring: r, month, date: recurringDate(r, month) });
+    }
+  }
+  return out;
+}
+
 /**
  * Elenca i movimenti attesi tra oggi (escluso) e `to` (incluso). Le voci mensili attive non
  * ancora registrate sono considerate dovute alla loro data, oppure oggi se già scadute.
@@ -389,9 +512,10 @@ export function scheduledEvents(data: Data, from = today(), to = forecastHorizon
     .map((t) => ({ date: t.date, kind: t.kind, amount: t.amount, accountId: t.accountId, toAccountId: t.toAccountId, label: t.description || t.category }));
 
   const fallback = data.accounts.find((a) => !a.archived) ?? data.accounts[0];
-  for (let month = monthOf(from); month <= monthOf(to); month = addMonths(month, 1)) {
+  for (let month = addMonths(monthOf(from), -OVERDUE_MONTHS); month <= monthOf(to); month = addMonths(month, 1)) {
     for (const r of data.recurring) {
       if (!recurringDue(r, month) || recurringPayment(data.transactions, r, month)) continue;
+      if (month < monthOf(from) && !hasKnownStart(r)) continue;
       const due = recurringDate(r, month);
       if (due > to) continue;
       const account = data.accounts.find((a) => a.id === r.accountId && !a.archived) ?? fallback;
@@ -546,7 +670,9 @@ export const sortPlanned = (list: Planned[]) =>
 export function parseAmount(input: string): number {
   const s = input.trim().replace(/\s|€/g, '');
   if (!s) return NaN;
-  const normalized = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s;
+  // senza virgola, "1.500" o "1.234.567" sono migliaia (gli importi hanno al massimo due decimali)
+  const thousands = /^-?[1-9]\d{0,2}(\.\d{3})+$/.test(s);
+  const normalized = s.includes(',') || thousands ? s.replace(/\./g, '').replace(',', '.') : s;
   return /^-?\d*\.?\d+$/.test(normalized) ? round(Number(normalized)) : NaN;
 }
 
@@ -562,6 +688,8 @@ export function normalize(raw: Partial<Data> & { version?: number }): Data {
     transactions: (raw.transactions ?? []).map(stamp),
     recurring: (raw.recurring ?? []).map(stamp),
     planned: (raw.planned ?? []).map(stamp),
+    categories: (raw.categories ?? []).map(stamp),
+    ...(raw.settings ? { settings: stamp(raw.settings) } : {}),
     deleted: raw.deleted ?? {},
   };
   return ensureAccount(data);
@@ -595,7 +723,7 @@ export function parseBackup(json: string): Data {
   return normalize(raw);
 }
 
-const COLLECTIONS: Collection[] = ['accounts', 'transactions', 'recurring', 'planned'];
+export const COLLECTIONS: Collection[] = ['accounts', 'transactions', 'recurring', 'planned', 'categories'];
 
 /**
  * Unisce i dati di due dispositivi: per ogni record vince la versione con `updatedAt` più
@@ -618,12 +746,18 @@ export function merge(a: Data, b: Data): Data {
     return [...map.values()].filter((item) => !(deleted[item.id] >= item.updatedAt));
   };
 
+  // impostazioni: vince la modifica più recente (a parità, scelta deterministica)
+  const [sa, sb] = [a.settings, b.settings];
+  const settings = !sa || !sb ? (sa ?? sb) : sa.updatedAt > sb.updatedAt || (sa.updatedAt === sb.updatedAt && JSON.stringify(sa) >= JSON.stringify(sb)) ? sa : sb;
+
   return ensureAccount({
     version: 2,
     accounts: pick(a.accounts, b.accounts),
     transactions: pick(a.transactions, b.transactions),
     recurring: pick(a.recurring, b.recurring),
     planned: pick(a.planned, b.planned),
+    categories: pick(a.categories ?? [], b.categories ?? []),
+    ...(settings ? { settings } : {}),
     deleted,
   });
 }
@@ -634,6 +768,7 @@ export function sameData(a: Data, b: Data): boolean {
     JSON.stringify([
       ...COLLECTIONS.map((c) => [...(d[c] as { id: string }[])].sort((x, y) => x.id.localeCompare(y.id))),
       Object.entries(d.deleted).sort(([x], [y]) => x.localeCompare(y)),
+      d.settings ?? null,
     ]);
   return canon(a) === canon(b);
 }

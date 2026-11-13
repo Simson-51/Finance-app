@@ -2,7 +2,7 @@
  * Promemoria con le notifiche di sistema, mostrati quando si apre l'app (non c'è un server,
  * quindi ad app chiusa non arrivano). Ogni promemoria viene mostrato al massimo una volta al giorno.
  */
-import { accountName, dayAfter, dayBefore, euro, forecast, nextPayday, scheduledEvents, today } from './finance';
+import { accountName, dayAfter, dayBefore, euro, forecast, macroSummary, monthOf, nextPayday, scheduledEvents, today } from './finance';
 import type { Data } from './types';
 
 const PREF = 'finanze:notify';
@@ -55,6 +55,10 @@ export function buildReminder(data: Data, payday: number, day = today()): Remind
     if (f?.shortfall > 0) lines.push(`⚠️ ${accountName(data.accounts, a.id)}: mancano ${euro(f.shortfall)} prima dello stipendio`);
   }
   if (fc.unassigned.shortfall > 0) lines.push(`⚠️ Spese sicure senza conto: mancano ${euro(fc.unassigned.shortfall)} prima dello stipendio`);
+  const wants = macroSummary(data, monthOf(day), day).wants;
+  if (wants && wants.state !== 'ok') {
+    lines.push(`⚠️ Desideri: ${euro(wants.total)} su ${euro(wants.budget)} di budget${wants.left < 0 ? ` (superato di ${euro(-wants.left)})` : ''}`);
+  }
   if (!lines.length) return null;
   const title = lines.some((l) => l.startsWith('⚠️')) ? 'Attenzione ai conti' : 'Promemoria pagamenti';
   return { title, lines };
