@@ -1,9 +1,10 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { accountName, CATEGORIES, euro, formatDate, isFuture, isVisible, monthOf, parseAmount, sum, today, transactionsIn, uid, usableAccounts } from '../finance';
+import { accountName, CATEGORIES, categoriesFor, euro, formatDate, isFuture, isVisible, monthOf, parseAmount, sum, today, transactionsIn, uid, usableAccounts } from '../finance';
 import type { Store } from '../store';
 import type { Account, Kind, Transaction, TxKind } from '../types';
 import { AccountSelect } from './Accounts';
 import { Empty, Field, Modal } from './ui';
+import { CategorySelect, useCategories } from './categories';
 
 const KIND_LABEL: Record<TxKind, string> = { uscita: 'Uscita', entrata: 'Entrata', trasferimento: 'Trasferimento' };
 const TRANSFER_CATEGORY = 'Trasferimento';
@@ -39,12 +40,13 @@ export function TransactionForm({
   const [category, setCategory] = useState(initial?.kind === 'trasferimento' ? CATEGORIES.uscita[0] : (initial?.category ?? CATEGORIES.uscita[0]));
   const [description, setDescription] = useState(initial?.description ?? '');
   const [error, setError] = useState('');
+  const { custom } = useCategories();
 
   const canTransfer = usableAccounts(accounts, initial?.toAccountId).length > 1;
 
   const switchKind = (k: TxKind) => {
     setKind(k);
-    if (k !== 'trasferimento' && !CATEGORIES[k].includes(category)) setCategory(CATEGORIES[k][0]);
+    if (k !== 'trasferimento' && !categoriesFor(custom, k).includes(category)) setCategory(CATEGORIES[k][0]);
   };
 
   const changeFrom = (id: string) => {
@@ -74,7 +76,6 @@ export function TransactionForm({
   };
 
   const catKind: Kind = kind === 'entrata' ? 'entrata' : 'uscita';
-  const categories = CATEGORIES[catKind].includes(category) ? CATEGORIES[catKind] : [category, ...CATEGORIES[catKind]];
   const kinds: TxKind[] = canTransfer || kind === 'trasferimento' ? ['uscita', 'entrata', 'trasferimento'] : ['uscita', 'entrata'];
 
   return (
@@ -102,13 +103,7 @@ export function TransactionForm({
           <Field label="Data">{(id) => <input id={id} type="date" value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
           {kind !== 'trasferimento' && (
             <Field label="Categoria">
-              {(id) => (
-                <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
-                  {categories.map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </select>
-              )}
+              {(id) => <CategorySelect id={id} kind={catKind} value={category} onChange={setCategory} />}
             </Field>
           )}
         </div>
@@ -237,7 +232,9 @@ export function TransactionsView({ store, month }: { store: Store; month: string
   const monthTxs = transactionsIn(store.data.transactions, month).filter(isVisible);
   const categories = [...new Set(monthTxs.filter((t) => t.kind !== 'trasferimento').map((t) => t.category))].sort();
   const q = query.trim().toLowerCase();
-  const visible = monthTxs.filter(
+  // la ricerca per testo guarda tutti i mesi, non solo quello selezionato
+  const source = q ? store.data.transactions.filter(isVisible) : monthTxs;
+  const visible = source.filter(
     (t) =>
       (filter === 'tutti' || t.kind === filter) &&
       (!category || t.category === category) &&
@@ -293,6 +290,12 @@ export function TransactionsView({ store, month }: { store: Store; month: string
         <input type="search" placeholder="Cerca…" aria-label="Cerca" value={query} onChange={(e) => setQuery(e.target.value)} />
       </div>
 
+      {q && (
+        <p className="small muted search-note">
+          Ricerca in tutti i mesi: {visible.length} {visible.length === 1 ? 'movimento trovato' : 'movimenti trovati'}.
+        </p>
+      )}
+
       {visible.length > 0 && (
         <div className="totals-strip">
           <span>
@@ -314,8 +317,8 @@ export function TransactionsView({ store, month }: { store: Store; month: string
       )}
 
       {visible.length === 0 ? (
-        <Empty icon="🧾" title={monthTxs.length ? 'Nessun movimento corrisponde ai filtri' : 'Nessun movimento in questo mese'}>
-          {!monthTxs.length && 'Aggiungi la tua prima entrata o uscita con il pulsante “Aggiungi”.'}
+        <Empty icon="🧾" title={q || monthTxs.length ? 'Nessun movimento corrisponde ai filtri' : 'Nessun movimento in questo mese'}>
+          {!q && !monthTxs.length && 'Aggiungi la tua prima entrata o uscita con il pulsante “Aggiungi”.'}
         </Empty>
       ) : (
         <>

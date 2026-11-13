@@ -102,14 +102,22 @@ export interface Planned extends Synced {
   accountId?: string;
 }
 
+/** Categoria aggiunta dall'utente, oltre a quelle predefinite. */
+export interface Category extends Synced {
+  kind: Kind;
+  name: string;
+}
+
 export interface Data {
   version: 2;
   accounts: Account[];
   transactions: Transaction[];
   recurring: Recurring[];
   planned: Planned[];
+  /** Categorie personalizzate. */
+  categories: Category[];
   /** Record eliminati (id → momento dell'eliminazione), per propagare le eliminazioni tra dispositivi. */
   deleted: Record<string, number>;
 }
 
-export type Collection = 'accounts' | 'transactions' | 'recurring' | 'planned';
+export type Collection = 'accounts' | 'transactions' | 'recurring' | 'planned' | 'categories';

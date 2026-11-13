@@ -1,18 +1,11 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { emptyData, parseBackup, toCsv, today } from '../finance';
+import { download, exportBackup, lastBackup } from '../backup';
+import { askCategory } from './categories';
 import type { Store } from '../store';
 import type { Sync } from '../useSync';
 import { Field } from './ui';
 import { enableNotifications, needsHomeScreen, notificationsEnabled, notificationsSupported, setNotificationsPref } from '../notify';
-
-function download(name: string, content: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 export type Theme = 'auto' | 'light' | 'dark';
 
@@ -213,7 +206,8 @@ export function SettingsView({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const { accounts, transactions, recurring, planned } = store.data;
+  const { accounts, transactions, recurring, planned, categories } = store.data;
+  const [backupAt, setBackupAt] = useState(lastBackup);
 
   const importFile = async (file: File) => {
     try {
@@ -257,6 +251,44 @@ export function SettingsView({
       </section>
 
       <section className="card settings">
+        <h3>Categorie</h3>
+        <p className="muted small">
+          Oltre a quelle predefinite puoi aggiungere le tue, da qui o dalla voce «＋ Nuova categoria…» nei moduli. Se ne togli una, i movimenti
+          che la usano la conservano.
+        </p>
+        {categories.length > 0 && (
+          <ul className="chips">
+            {[...categories]
+              .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+              .map((c) => (
+                <li key={c.id} className="chip">
+                  <span>
+                    {c.name} <span className="muted">· {c.kind === 'uscita' ? 'spesa' : 'entrata'}</span>
+                  </span>
+                  <button
+                    className="chip-x"
+                    aria-label={`Togli la categoria ${c.name}`}
+                    onClick={() => {
+                      if (confirm(`Togliere la categoria “${c.name}” dagli elenchi? I movimenti non vengono toccati.`)) store.deleteCategory(c.id);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+          </ul>
+        )}
+        <div className="button-row">
+          <button className="btn ghost" onClick={() => askCategory(categories, 'uscita', store.addCategory)}>
+            + Categoria di spesa
+          </button>
+          <button className="btn ghost" onClick={() => askCategory(categories, 'entrata', store.addCategory)}>
+            + Categoria di entrata
+          </button>
+        </div>
+      </section>
+
+      <section className="card settings">
         <h3>Aspetto</h3>
         <div className="segmented" role="radiogroup" aria-label="Tema">
           {(['auto', 'light', 'dark'] as Theme[]).map((t) => (
@@ -274,10 +306,16 @@ export function SettingsView({
           <br />
           {sync.enabled
             ? 'Con la sincronizzazione attiva i dati sono già salvati online; un backup in più non guasta.'
-            : 'I dati sono salvati solo in questo browser: esporta regolarmente un backup per non perderli.'}
+            : 'I dati sono salvati solo in questo browser: esporta regolarmente un backup per non perderli (dopo un mese te lo ricorda il Riepilogo).'}
+          <br />
+          Ultimo backup: {backupAt ? new Date(backupAt).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' }) : 'mai fatto da questo dispositivo'}.
         </p>
         <div className="button-row">
-          <button className="btn primary" onClick={() => download(`finanze-backup-${today()}.json`, JSON.stringify(store.data, null, 2), 'application/json')}>
+          <button className="btn primary" onClick={() => {
+              exportBackup(JSON.stringify(store.data, null, 2));
+              setBackupAt(Date.now());
+            }}
+          >
             Esporta backup
           </button>
           <button className="btn ghost" onClick={() => fileRef.current?.click()}>

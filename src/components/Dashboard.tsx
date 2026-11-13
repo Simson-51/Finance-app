@@ -12,6 +12,7 @@ import {
   formatMonth,
   monthOf,
   monthSummary,
+  overdueRecurring,
   plannedProgress,
   recurringDate,
   recurringPayment,
@@ -28,11 +29,27 @@ import { Alerts, shortfallText, useForecast, WarnIcon } from './Alerts';
 import { SankeyCard } from './Sankey';
 import { BalanceChart } from './BalanceChart';
 import { Empty, Progress } from './ui';
+import { backupDue, exportBackup, snoozeBackup } from '../backup';
 
-export function Dashboard({ store, month, payday, goTo }: { store: Store; month: string; payday: number; goTo: (t: Tab) => void }) {
+export function Dashboard({
+  store,
+  month,
+  payday,
+  goTo,
+  syncEnabled,
+}: {
+  store: Store;
+  month: string;
+  payday: number;
+  goTo: (t: Tab) => void;
+  syncEnabled: boolean;
+}) {
   const { data } = store;
   const [adding, setAdding] = useState<Kind | null>(null);
   const [editing, setEditing] = useState<Transaction | null>(null);
+  // promemoria del backup: solo senza sincronizzazione, che è già una copia online
+  const [backupAsked, setBackupAsked] = useState(false);
+  const askBackup = !syncEnabled && !backupAsked && backupDue(data);
   const s = monthSummary(data, month);
   const fc = useForecast(data, payday);
   const committed = commitments(data);
@@ -50,6 +67,8 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   const due = data.recurring
     .filter((r) => recurringDue(r, month) && !recurringPayment(data.transactions, r, month))
     .sort((a, b) => a.day - b.day);
+  // nel mese in corso si vedono anche le voci dei mesi passati mai registrate
+  const overdue = isCurrent ? overdueRecurring(data) : [];
   const planned = sortPlanned(data.planned.filter((p) => !p.boughtDate && !p.committed)).slice(0, 3);
   const recent = transactionsIn(data.transactions, month)
     .filter((t) => isVisible(t) && !isFuture(t))
@@ -67,6 +86,40 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
   return (
     <div className="view">
       <Alerts store={store} fc={fc} />
+
+      {askBackup && (
+        <div className="alerts">
+          <div className="alert info backup-alert">
+            <span className="alert-icon" aria-hidden>
+              💾
+            </span>
+            <div>
+              <strong>È ora di fare un backup</strong>
+              <p>I dati sono salvati solo su questo dispositivo: scarica una copia per non perderli.</p>
+              <div className="button-row">
+                <button
+                  className="btn primary small"
+                  onClick={() => {
+                    exportBackup(JSON.stringify(data, null, 2));
+                    setBackupAsked(true);
+                  }}
+                >
+                  Esporta backup
+                </button>
+                <button
+                  className="btn ghost small"
+                  onClick={() => {
+                    snoozeBackup();
+                    setBackupAsked(true);
+                  }}
+                >
+                  Più tardi
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="quick-add">
         <button className="btn income" onClick={() => setAdding('entrata')}>
@@ -141,7 +194,7 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
             <strong className={s.forecast >= 0 ? 'big amount entrata' : 'big amount uscita'}>{euro(s.forecast)}</strong>
           </div>
           <p className="small muted">
-            Considerando i movimenti previsti e le voci mensili non ancora registrate
+            Considerando i movimenti previsti, le voci mensili non ancora registrate e le spese sicure
             {s.pendingExpenses > 0 && <> (−{euro(s.pendingExpenses)} di spese</>}
             {s.pendingIncome > 0 && <>{s.pendingExpenses > 0 ? ', ' : ' ('}+{euro(s.pendingIncome)} di entrate</>})
           </p>
@@ -235,10 +288,20 @@ export function Dashboard({ store, month, payday, goTo }: { store: Store; month:
           </div>
           {data.recurring.length === 0 ? (
             <p className="muted small">Nessuna spesa mensile impostata.</p>
-          ) : due.length === 0 ? (
+          ) : due.length === 0 && overdue.length === 0 ? (
             <p className="muted small">✓ Tutto registrato per questo mese.</p>
           ) : (
             <ul className="mini-list">
+              {overdue.map(({ recurring: r, month: m, date }) => (
+                <li key={`${r.id}-${m}`}>
+                  <button className="tick" aria-label={`Segna ${r.name} di ${formatMonth(m).toLowerCase()} come registrata`} onClick={() => store.toggleRecurringPaid(r, m)} />
+                  <span className="list-main">
+                    <span className="list-title">{r.name}</span>
+                    <span className="list-sub error">Non registrata · {formatDate(date)}</span>
+                  </span>
+                  <span className={`amount ${r.kind}`}>{euro(r.amount)}</span>
+                </li>
+              ))}
               {due.map((r) => {
                 const date = recurringDate(r, month);
                 const late = isCurrent && date < today() && r.kind === 'uscita';

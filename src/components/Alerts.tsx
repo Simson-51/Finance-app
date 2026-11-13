@@ -85,8 +85,9 @@ function ForecastDetail({ account, fc, onClose }: { account: Account; fc: Payday
       </div>
       {overdue.length > 0 && (
         <p className="note">
-          💡 Le voci mensili scadute e non ancora segnate come pagate vengono contate come da pagare oggi. Se le hai già pagate, segnale
-          come pagate in <strong>Mensili</strong>; se iniziano più avanti, cambia il loro <strong>Primo addebito</strong>.
+          💡 Le voci mensili scadute e non ancora segnate come pagate (anche degli ultimi tre mesi) vengono contate come da pagare oggi.
+          Se le hai già pagate, segnale come pagate nel <strong>Riepilogo</strong>, alla voce «Voci mensili da registrare»; se iniziano più
+          avanti, cambia il loro <strong>Primo addebito</strong> in <strong>Mensili</strong>.
         </p>
       )}
     </Modal>

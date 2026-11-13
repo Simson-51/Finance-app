@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { addMonths, DEFAULT_PAYDAY, formatMonth, monthOf, today } from './finance';
 import { useStore } from './store';
 import { useSync } from './useSync';
@@ -9,6 +9,7 @@ import { RecurringView } from './components/Recurring';
 import { PlannedView } from './components/Planned';
 import { SettingsView, timeAgo, type Theme } from './components/Settings';
 import { AccountsView } from './components/Accounts';
+import { CategoriesContext } from './components/categories';
 
 export type Tab = 'home' | 'movimenti' | 'conti' | 'mensili' | 'acquisti' | 'impostazioni';
 
@@ -79,10 +80,15 @@ export default function App() {
     else document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  const { categories } = store.data;
+  const { addCategory } = store;
+  const categoriesValue = useMemo(() => ({ custom: categories, add: addCategory }), [categories, addCategory]);
+
   const showMonth = tab === 'home' || tab === 'movimenti' || tab === 'mensili';
   const current = monthOf(today());
 
   return (
+    <CategoriesContext.Provider value={categoriesValue}>
     <div className="app">
       <header className="topbar">
         <div className="brand">
@@ -145,7 +151,7 @@ export default function App() {
       )}
 
       <main>
-        {tab === 'home' && <Dashboard store={store} month={month} payday={payday} goTo={setTab} />}
+        {tab === 'home' && <Dashboard store={store} month={month} payday={payday} goTo={setTab} syncEnabled={sync.enabled} />}
         {tab === 'movimenti' && <TransactionsView store={store} month={month} />}
         {tab === 'conti' && <AccountsView store={store} payday={payday} />}
         {tab === 'mensili' && <RecurringView store={store} month={month} />}
@@ -162,5 +168,6 @@ export default function App() {
         ))}
       </nav>
     </div>
+    </CategoriesContext.Provider>
   );
 }

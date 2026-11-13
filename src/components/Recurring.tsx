@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { addMonths, CATEGORIES, defaultStartMonth, endMonthFor, FREQUENCIES, installmentNumber, installmentsTotal, nextDueMonth, recurringEvery, euro, formatMonth, monthOf, parseAmount, recurringDate, recurringDue, recurringPayment, recurringStart, sum, formatDate, today, uid } from '../finance';
+import { addMonths, CATEGORIES, categoriesFor, defaultStartMonth, endMonthFor, FREQUENCIES, installmentNumber, installmentsTotal, nextDueMonth, recurringEvery, euro, formatMonth, monthOf, parseAmount, recurringDate, recurringDue, recurringPayment, recurringStart, sum, formatDate, today, uid } from '../finance';
 import type { Store } from '../store';
 import type { Account, Kind, Recurring } from '../types';
 import { AccountSelect } from './Accounts';
 import { Empty, Field, Modal, Progress } from './ui';
+import { CategorySelect, useCategories } from './categories';
 
 function RecurringForm({
   accounts,
@@ -38,10 +39,11 @@ function RecurringForm({
     accounts.find((a) => a.id === initial?.accountId)?.id ?? accounts.find((a) => !a.archived)?.id ?? accounts[0].id,
   );
   const [error, setError] = useState('');
+  const { custom } = useCategories();
 
   const switchKind = (k: Kind) => {
     setKind(k);
-    if (!CATEGORIES[k].includes(category)) setCategory(CATEGORIES[k][0]);
+    if (!categoriesFor(custom, k).includes(category)) setCategory(CATEGORIES[k][0]);
   };
 
   const submit = (e: FormEvent) => {
@@ -161,13 +163,7 @@ function RecurringForm({
           </Field>
         )}
         <Field label="Categoria">
-          {(id) => (
-            <select id={id} value={category} onChange={(e) => setCategory(e.target.value)}>
-              {CATEGORIES[kind].map((c) => (
-                <option key={c}>{c}</option>
-              ))}
-            </select>
-          )}
+          {(id) => <CategorySelect id={id} kind={kind} value={category} onChange={setCategory} />}
         </Field>
         <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label={kind === 'uscita' ? 'Pagata con' : 'Accreditata su'} />
         <label className="check">

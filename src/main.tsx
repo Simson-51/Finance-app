@@ -1,11 +1,53 @@
-import { StrictMode } from 'react';
+import { Component, StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './styles.css';
+import { download } from './backup';
+import { today } from './finance';
+
+/**
+ * Se l'app va in errore, invece della pagina bianca mostra un messaggio da cui si può
+ * ricaricare o scaricare una copia dei dati (letti così come sono salvati, senza toccarli).
+ */
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem('finanze:data');
+    } catch {
+      // storage non disponibile
+    }
+    return (
+      <div className="crash">
+        <h1>Qualcosa è andato storto</h1>
+        <p>L'app ha incontrato un errore. I tuoi dati non sono stati toccati: sono ancora salvati su questo dispositivo.</p>
+        <div className="button-row">
+          <button className="btn primary" onClick={() => location.reload()}>
+            Ricarica l'app
+          </button>
+          {raw && (
+            <button className="btn ghost" onClick={() => download(`finanze-backup-${today()}.json`, raw, 'application/json')}>
+              Esporta backup
+            </button>
+          )}
+        </div>
+        <p className="small muted">Dettaglio dell'errore: {error.message}</p>
+      </div>
+    );
+  }
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );
 

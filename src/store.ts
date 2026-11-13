@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { autoPayId, defaultStartMonth, emptyData, ensureAccount, merge, normalize, paymentMonth, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, recurringStart, sameData, today, uid } from './finance';
-import type { Account, Collection, Data, Planned, Recurring, Transaction } from './types';
+import { autoPayId, categoryId, COLLECTIONS, defaultStartMonth, emptyData, ensureAccount, merge, normalize, paymentMonth, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, recurringStart, sameData, today, uid } from './finance';
+import type { Account, Collection, Data, Kind, Planned, Recurring, Transaction } from './types';
 
 const KEY = 'finanze:data';
 
@@ -181,6 +181,14 @@ export function useStore() {
       [update],
     ),
 
+    /** Aggiunge una categoria personalizzata (lo stesso nome non crea doppioni). */
+    addCategory: useCallback(
+      (kind: Kind, name: string) => update((d) => upsertIn(d, 'categories', { id: categoryId(kind, name), kind, name: name.trim() })),
+      [update],
+    ),
+    /** Toglie la categoria dagli elenchi; i movimenti che la usano la conservano. */
+    deleteCategory: useCallback((id: string) => update((d) => removeFrom(d, 'categories', [id])), [update]),
+
     /**
      * Sostituisce tutti i dati (import di un backup o azzeramento). Tutto ciò che non è nei
      * nuovi dati viene segnato come eliminato e i nuovi record diventano i più recenti,
@@ -192,7 +200,7 @@ export function useStore() {
           const at = now();
           const keep = new Set<string>();
           const fresh = { ...next, deleted: { ...d.deleted, ...next.deleted } };
-          for (const key of ['accounts', 'transactions', 'recurring', 'planned'] as const) {
+          for (const key of COLLECTIONS) {
             (fresh[key] as { id: string; updatedAt: number }[]) = next[key].map((x) => {
               keep.add(x.id);
               return { ...x, updatedAt: at };

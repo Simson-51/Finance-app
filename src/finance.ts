@@ -1,4 +1,4 @@
-import type { Account, AccountType, Collection, Data, Kind, Planned, Recurring, Transaction } from './types';
+import type { Account, AccountType, Category, Collection, Data, Kind, Planned, Recurring, Transaction } from './types';
 
 export const CATEGORIES: Record<Kind, string[]> = {
   entrata: ['Stipendio', 'Freelance', 'Rimborsi', 'Regali', 'Investimenti', 'Altro'],
@@ -47,8 +47,29 @@ export const emptyData = (): Data => ({
   transactions: [],
   recurring: [],
   planned: [],
+  categories: [],
   deleted: {},
 });
+
+/** Id fisso di una categoria personalizzata: lo stesso nome su due dispositivi dà lo stesso record. */
+export const categoryId = (kind: Kind, name: string) => `cat-${kind}-${name.trim().toLowerCase()}`;
+
+/**
+ * Categorie tra cui scegliere: quelle predefinite più quelle dell'utente ("Altro" resta in fondo).
+ * `keep` aggiunge in cima una categoria non più in elenco (es. eliminata) usata dal record che si modifica.
+ */
+export function categoriesFor(custom: Category[], kind: Kind, keep?: string): string[] {
+  const base = CATEGORIES[kind];
+  const seen = new Set(base.map((c) => c.toLowerCase()));
+  const extra: string[] = [];
+  for (const c of [...custom].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (c.kind !== kind || seen.has(c.name.toLowerCase())) continue;
+    seen.add(c.name.toLowerCase());
+    extra.push(c.name);
+  }
+  const list = [...base.slice(0, -1), ...extra, base[base.length - 1]];
+  return keep && !seen.has(keep.toLowerCase()) ? [keep, ...list] : list;
+}
 
 export const uid = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -225,7 +246,11 @@ export function monthSummary(data: Data, month: string, asOf = today()): MonthSu
   const active = data.recurring.filter((r) => recurringDue(r, month));
   const pending = active.filter((r) => !recurringPayment(data.transactions, r, month));
   const pendingIncome = round(sum(pending.filter((r) => r.kind === 'entrata')) + sum(future.filter((t) => t.kind === 'entrata')));
-  const commitments = openCommitments(data).filter((p) => p.targetDate && monthOf(p.targetDate) === month && p.targetDate > asOf);
+  // spese sicure: nel mese in corso anche quelle senza data o con data passata (da pagare da subito)
+  const current = month === monthOf(asOf);
+  const commitments = openCommitments(data).filter((p) =>
+    current ? !p.targetDate || monthOf(p.targetDate) <= month : !!p.targetDate && monthOf(p.targetDate) === month && month > monthOf(asOf),
+  );
   const pendingExpenses = round(
     sum(pending.filter((r) => r.kind === 'uscita')) + sum(future.filter((t) => t.kind === 'uscita')) + sum(commitments.map((p) => ({ amount: p.cost }))),
   );
@@ -388,6 +413,24 @@ export const dayBefore = (date: string) => {
   return today(new Date(y, m - 1, d - 1));
 };
 
+/** Quanti mesi indietro si cercano le voci mensili scadute e mai registrate. */
+export const OVERDUE_MONTHS = 3;
+
+/** Le voci importate da versioni molto vecchie non hanno un inizio noto: per loro non si guarda ai mesi passati. */
+const hasKnownStart = (r: Recurring) => !!r.startMonth || r.updatedAt > 0;
+
+/** Voci mensili dei mesi passati (fino a `OVERDUE_MONTHS`) non ancora registrate, dalla più vecchia. */
+export function overdueRecurring(data: Pick<Data, 'recurring' | 'transactions'>, day = today()): { recurring: Recurring; month: string; date: string }[] {
+  const out: { recurring: Recurring; month: string; date: string }[] = [];
+  for (let i = OVERDUE_MONTHS; i >= 1; i--) {
+    const month = addMonths(monthOf(day), -i);
+    for (const r of data.recurring) {
+      if (hasKnownStart(r) && recurringDue(r, month) && !recurringPayment(data.transactions, r, month)) out.push({ recurring: r, month, date: recurringDate(r, month) });
+    }
+  }
+  return out;
+}
+
 /**
  * Elenca i movimenti attesi tra oggi (escluso) e `to` (incluso). Le voci mensili attive non
  * ancora registrate sono considerate dovute alla loro data, oppure oggi se già scadute.
@@ -398,9 +441,10 @@ export function scheduledEvents(data: Data, from = today(), to = forecastHorizon
     .map((t) => ({ date: t.date, kind: t.kind, amount: t.amount, accountId: t.accountId, toAccountId: t.toAccountId, label: t.description || t.category }));
 
   const fallback = data.accounts.find((a) => !a.archived) ?? data.accounts[0];
-  for (let month = monthOf(from); month <= monthOf(to); month = addMonths(month, 1)) {
+  for (let month = addMonths(monthOf(from), -OVERDUE_MONTHS); month <= monthOf(to); month = addMonths(month, 1)) {
     for (const r of data.recurring) {
       if (!recurringDue(r, month) || recurringPayment(data.transactions, r, month)) continue;
+      if (month < monthOf(from) && !hasKnownStart(r)) continue;
       const due = recurringDate(r, month);
       if (due > to) continue;
       const account = data.accounts.find((a) => a.id === r.accountId && !a.archived) ?? fallback;
@@ -573,6 +617,7 @@ export function normalize(raw: Partial<Data> & { version?: number }): Data {
     transactions: (raw.transactions ?? []).map(stamp),
     recurring: (raw.recurring ?? []).map(stamp),
     planned: (raw.planned ?? []).map(stamp),
+    categories: (raw.categories ?? []).map(stamp),
     deleted: raw.deleted ?? {},
   };
   return ensureAccount(data);
@@ -606,7 +651,7 @@ export function parseBackup(json: string): Data {
   return normalize(raw);
 }
 
-const COLLECTIONS: Collection[] = ['accounts', 'transactions', 'recurring', 'planned'];
+export const COLLECTIONS: Collection[] = ['accounts', 'transactions', 'recurring', 'planned', 'categories'];
 
 /**
  * Unisce i dati di due dispositivi: per ogni record vince la versione con `updatedAt` più
@@ -635,6 +680,7 @@ export function merge(a: Data, b: Data): Data {
     transactions: pick(a.transactions, b.transactions),
     recurring: pick(a.recurring, b.recurring),
     planned: pick(a.planned, b.planned),
+    categories: pick(a.categories ?? [], b.categories ?? []),
     deleted,
   });
 }

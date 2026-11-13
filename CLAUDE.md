@@ -21,11 +21,13 @@ PWA personale (un solo utente, italiano) per gestire le proprie finanze: conti, 
 
 | File | Contenuto |
 |---|---|
-| `src/types.ts` | Modello dati: `Account`, `Transaction`, `Recurring`, `Planned`, `Data` (version 2). |
+| `src/types.ts` | Modello dati: `Account`, `Transaction`, `Recurring`, `Planned`, `Category`, `Data` (version 2). |
 | `src/finance.ts` | **Tutta la logica pura** (date, importi, riepiloghi, saldi, previsioni, ricariche, pagamenti automatici, spese sicure, unione dati, Sankey, serie del saldo, CSV, migrazione). Testata. |
 | `src/store.ts` | Hook `useStore`: stato + salvataggio in `localStorage`, azioni (save/delete/…), timbro `updatedAt`, marcatori di eliminazione, riconciliazione automatica (`reconcileAutoPay` + `reconcileTopUps`) a ogni modifica e al cambio giorno. |
 | `src/sync.ts` | Cifratura (AES-GCM 256, chiave PBKDF2-SHA256 600k iterazioni dalla password) e API dei Gist (`connect`, `pull`, `push`). |
 | `src/useSync.ts` | Hook di sincronizzazione: all'avvio, in primo piano, ogni minuto, 1,5 s dopo ogni modifica; unisce con `merge`. |
+| `src/backup.ts` | Esportazione del backup su file, data dell'ultimo backup e promemoria mensile (`backupDue`, solo senza sincronizzazione). |
+| `src/components/categories.tsx` | `CategoriesContext`, `CategorySelect` (con «＋ Nuova categoria…»), `askCategory`. |
 | `src/notify.ts` | Promemoria con notifiche di sistema **solo all'apertura** dell'app (`buildReminder`, `notifyIfNeeded`). |
 | `src/App.tsx` | Navigazione a schede, mese selezionato, tema, giorno dello stipendio, trigger dei promemoria. |
 | `src/components/Dashboard.tsx` | Riepilogo: avvisi, KPI, disponibile libero, previsione fine mese, Sankey, andamento saldo, conti, categorie, ultimi 6 mesi, voci da registrare, movimenti previsti/recenti. |
@@ -37,7 +39,8 @@ PWA personale (un solo utente, italiano) per gestire le proprie finanze: conti, 
 | `src/components/Sankey.tsx`, `BalanceChart.tsx` | Grafici SVG (flusso del mese, andamento del saldo). |
 | `src/components/Settings.tsx` | Sincronizzazione, promemoria, giorno stipendio, tema, backup/import/CSV, reset. |
 | `src/components/ui.tsx` | `Modal` (`<dialog>`, bottom sheet su mobile), `Field`, `Empty`, `Progress`. |
-| `public/sw.js` | Service worker: pagine network-first con `cache: 'no-cache'`, asset cache-first, clic sulle notifiche. Cambiare `CACHE` quando cambia il SW. |
+| `public/sw.js` | Service worker: pagine network-first con `cache: 'no-cache'`, asset cache-first, clic sulle notifiche. A ogni pagina scaricata (`storePage`) mette in cache i suoi JS/CSS (offline dalla prima apertura) ed elimina quelli delle versioni vecchie. Cambiare `CACHE` quando cambia il SW. |
+| `src/main.tsx` | Avvio, `ErrorBoundary` (messaggio con "Ricarica" ed "Esporta backup" al posto della pagina bianca), registrazione del SW. |
 | `src/*.test.ts` | `finance.test.ts`, `forecast.test.ts`, `sync.test.ts`. |
 
 ## Modello dati e regole importanti
@@ -48,9 +51,13 @@ PWA personale (un solo utente, italiano) per gestire le proprie finanze: conti, 
 - **Conti**: saldo = `initialBalance` + movimenti fino alla data. I trasferimenti (`kind: 'trasferimento'`, `toAccountId`) non sono né entrate né uscite. Budget minimo: `minBalance` + `topUpFrom` + `autoTopUp` (automatica = un trasferimento al giorno con id fisso, ricalcolato; manuale = proposta con tasto).
 - **Movimenti con data futura** = "previsti": non cambiano il saldo di oggi, contano nelle previsioni, diventano reali alla data.
 - **Voci ricorrenti**: `startMonth` (primo addebito; per le voci vecchie si deduce da `updatedAt` con `defaultStartMonth`), `everyMonths` (1/2/3/6/12), `endMonth` (rate), `autoPay`. Usare sempre `recurringDue(r, month)`, mai solo `r.active`. Il pagamento di un mese si trova con `recurringPayment` (mese da `paymentMonth`: i pagamenti automatici restano legati al mese del loro id anche se la data cambia). I movimenti si eliminano con `removeTransactions`, che blocca anche la ricreazione del pagamento automatico.
+- **Voci scadute dei mesi passati**: `scheduledEvents` e `overdueRecurring` guardano fino a `OVERDUE_MONTHS` (3) mesi indietro; le voci non registrate contano come dovute oggi e compaiono nel Riepilogo tra le "Voci mensili da registrare". Escluse le voci senza inizio noto (`startMonth` assente e `updatedAt` 0).
+- **Categorie**: predefinite in `CATEGORIES` + personalizzate in `Data.categories` (id fisso `cat-<tipo>-<nome minuscolo>`, sincronizzate come gli altri record). Usare `categoriesFor(custom, kind, keep)` per gli elenchi. Togliere una categoria non tocca i movimenti.
 - **Spese sicure** (`Planned.committed`): debiti/acquisti già fatti ma non addebitati, `accountId` e `targetDate` facoltativi. Saldo mostrato = reale; accanto "Impegnati" e **"Disponibile libero"** (saldo − spese sicure). Con conto: entrano in `scheduledEvents` (alla data o da subito se senza data). Senza conto: avviso globale `forecast().unassigned`.
 - **Previsioni e avvisi**: `forecast(data, from, to)` simula giorno per giorno (movimenti futuri, voci ricorrenti non registrate, scadute = dovute oggi, spese sicure, ricariche) e registra `steps` per il dettaglio. Gli avvisi usano l'orizzonte **fino al giorno prima del prossimo stipendio** (`nextPayday`, giorno impostabile, predefinito **15**). Un conto nato negativo (carta di credito) segnala solo il peggioramento.
-- Importi: `parseAmount` accetta "12,50" e "1.234,56"; `euro()` usa uno **spazio non separabile** prima di € (attenzione nei test).
+- La **previsione di fine mese** (`monthSummary`) nel mese in corso conta anche le spese sicure senza data o con data passata.
+- La ricerca per testo in Movimenti guarda **tutti i mesi**.
+- Importi: `parseAmount` accetta "12,50", "1.234,56" e "1.500" (migliaia); `euro()` usa uno **spazio non separabile** prima di € (attenzione nei test).
 
 ## Decisioni prese con l'utente
 
@@ -58,6 +65,8 @@ PWA personale (un solo utente, italiano) per gestire le proprie finanze: conti, 
 - Avvisi fino allo stipendio del 15 (l'utente riceve lo stipendio quel giorno).
 - Spese sicure dentro la tab Acquisti; saldo reale + disponibile libero (non scalate dal saldo); generano avvisi.
 - Registrazione automatica delle voci ricorrenti attiva di default per le nuove.
+- **Mai cancellare o riscrivere i dati dell'utente** con una modifica: solo campi nuovi facoltativi, gestiti da `normalize()`.
+- La sincronizzazione resta (l'utente usa solo l'iPhone: gli serve come copia online); senza sincronizzazione c'è il promemoria mensile del backup.
 - Rimandati: import CSV dagli estratti conto (formati diversi per banca), "allinea saldo" (da valutare con l'uso), budget per categoria, obiettivi di risparmio collegati a un conto.
 
 ## Convenzioni UI
