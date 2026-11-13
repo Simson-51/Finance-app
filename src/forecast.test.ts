@@ -310,6 +310,18 @@ describe('registrazione automatica alla scadenza', () => {
     const untick = { ...d, transactions: d.transactions.filter((t) => t.id !== autoPayId('spotify', '2026-10')), deleted: { [autoPayId('spotify', '2026-10')]: 5 } };
     expect(reconcileAutoPay(untick, '2026-10-15', 6)).toBe(untick);
   });
+
+  it('un pagamento automatico spostato in un altro mese resta legato al suo mese', async () => {
+    const { reconcileAutoPay, recurringPayment } = await import('./finance');
+    const spotify = rec({ id: 'spotify', amount: 11.99, day: 10, accountId: 'hype', startMonth: '2026-10', autoPay: true });
+    const d = reconcileAutoPay(data({ accounts: [account({ id: 'hype' })], recurring: [spotify] }), '2026-10-15', 1);
+    // pagato in anticipo: la data passa al 30 settembre
+    const moved = { ...d, transactions: d.transactions.map((t) => ({ ...t, date: '2026-09-30' })) };
+    expect(recurringPayment(moved.transactions, spotify, '2026-10')?.id).toBe('autopay-spotify-2026-10');
+    expect(recurringPayment(moved.transactions, spotify, '2026-09')).toBeUndefined();
+    // niente doppione con lo stesso id
+    expect(reconcileAutoPay(moved, '2026-10-15', 2)).toBe(moved);
+  });
 });
 
 describe('andamento del saldo', () => {

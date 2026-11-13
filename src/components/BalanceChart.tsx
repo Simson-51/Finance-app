@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react';
-import { addMonths, balanceSeries, dayBefore, euro, formatDate, monthOf, nextPayday, today, type BalancePoint } from '../finance';
+import { addMonths, balanceSeries, dayBefore, daysInMonth, euro, formatDate, monthOf, nextPayday, today, type BalancePoint } from '../finance';
 import type { Data } from '../types';
 
 const RANGES = [
@@ -43,10 +43,12 @@ export function BalanceChart({ data, payday }: { data: Data; payday: number }) {
 
   const day = today();
   const until = dayBefore(nextPayday(payday, day));
-  const points = useMemo(
-    () => balanceSeries(data, `${addMonths(monthOf(day), -range)}-${day.slice(8)}`, day, until),
-    [data, range, day, until],
-  );
+  const points = useMemo(() => {
+    // stesso giorno di `range` mesi fa, adattato ai mesi più corti (il 31 diventa il 30 o il 28)
+    const month = addMonths(monthOf(day), -range);
+    const from = `${month}-${String(Math.min(Number(day.slice(8)), daysInMonth(month))).padStart(2, '0')}`;
+    return balanceSeries(data, from, day, until);
+  }, [data, range, day, until]);
 
   const values = points.map((p) => p.balance);
   const yt = ticks(Math.min(0, ...values), Math.max(...values));

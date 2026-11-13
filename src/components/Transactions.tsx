@@ -28,7 +28,7 @@ export function TransactionForm({
   onClose: () => void;
 }) {
   const usable = usableAccounts(accounts, initial?.accountId);
-  const firstAccount = (usable.find((a) => a.id === defaultAccount) ?? usable[0]).id;
+  const firstAccount = (usable.find((a) => a.id === defaultAccount) ?? usable[0] ?? accounts[0]).id;
   const [kind, setKind] = useState<TxKind>(initial?.kind ?? defaultKind);
   const [amount, setAmount] = useState(initial ? String(initial.amount).replace('.', ',') : '');
   const [date, setDate] = useState(initial?.date ?? defaultDate);

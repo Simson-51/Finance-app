@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { emptyData, ensureAccount, merge, normalize, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, sameData, today, uid } from './finance';
+import { autoPayId, defaultStartMonth, emptyData, ensureAccount, merge, normalize, paymentMonth, reconcileAutoPay, reconcileTopUps, recurringDate, recurringPayment, recurringStart, sameData, today, uid } from './finance';
 import type { Account, Collection, Data, Planned, Recurring, Transaction } from './types';
 
 const KEY = 'finanze:data';
@@ -32,6 +32,18 @@ function removeFrom(d: Data, key: Collection, ids: string[]): Data {
   const deleted = { ...d.deleted };
   for (const id of ids) deleted[id] = at;
   return { ...d, [key]: (d[key] as { id: string }[]).filter((x) => !ids.includes(x.id)), deleted };
+}
+
+/**
+ * Elimina dei movimenti. Se uno registrava una voce mensile, segna come eliminato anche il
+ * pagamento automatico di quel mese: altrimenti l'app lo registrerebbe di nuovo subito.
+ */
+function removeTransactions(d: Data, ids: string[]): Data {
+  const next = removeFrom(d, 'transactions', ids);
+  for (const t of d.transactions) {
+    if (t.recurringId && ids.includes(t.id)) next.deleted[autoPayId(t.recurringId, paymentMonth(t))] = next.deleted[t.id];
+  }
+  return next;
 }
 
 /** Modifica i movimenti che soddisfano `match`, aggiornandone la data di modifica. */
@@ -93,9 +105,17 @@ export function useStore() {
     ),
 
     saveTransaction: useCallback((t: Draft<Transaction>) => update((d) => upsertIn(d, 'transactions', t)), [update]),
-    deleteTransaction: useCallback((id: string) => update((d) => removeFrom(d, 'transactions', [id])), [update]),
+    deleteTransaction: useCallback((id: string) => update((d) => removeTransactions(d, [id])), [update]),
 
-    saveRecurring: useCallback((r: Draft<Recurring>) => update((d) => upsertIn(d, 'recurring', r)), [update]),
+    saveRecurring: useCallback(
+      (r: Draft<Recurring>) =>
+        update((d) => {
+          // una voce senza primo addebito lo dedurrebbe dall'ultima modifica: lo si fissa prima di cambiarla
+          const old = d.recurring.find((x) => x.id === r.id);
+          return upsertIn(d, 'recurring', { ...r, startMonth: r.startMonth ?? (old ? recurringStart(old) : defaultStartMonth(r.day)) });
+        }),
+      [update],
+    ),
     deleteRecurring: useCallback(
       // I movimenti già registrati restano, ma non sono più collegati alla voce eliminata.
       (id: string) =>
@@ -109,7 +129,7 @@ export function useStore() {
       (r: Recurring, month: string) =>
         update((d) => {
           const existing = recurringPayment(d.transactions, r, month);
-          if (existing) return removeFrom(d, 'transactions', [existing.id]);
+          if (existing) return removeTransactions(d, [existing.id]);
           const account = d.accounts.find((a) => a.id === r.accountId && !a.archived) ?? d.accounts.find((a) => !a.archived) ?? d.accounts[0];
           return upsertIn(d, 'transactions', {
             id: uid(),
@@ -137,7 +157,7 @@ export function useStore() {
     markBought: useCallback(
       (p: Planned, amount: number, accountId: string, date = today()) =>
         update((d) => {
-          const next = upsertIn(d, 'planned', { ...p, boughtDate: date, saved: amount });
+          const next = upsertIn(d, 'planned', { ...p, boughtDate: date });
           return upsertIn(next, 'transactions', {
             id: uid(),
             kind: 'uscita',

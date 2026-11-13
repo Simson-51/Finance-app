@@ -188,9 +188,18 @@ export function reconcileAutoPay(data: Data, day = today(), now = Date.now()): D
   return added.length ? { ...data, transactions: [...data.transactions, ...added] } : data;
 }
 
+/**
+ * Mese a cui si riferisce il pagamento di una voce mensile: quello della sua data, tranne per i
+ * pagamenti automatici, che restano legati al loro mese anche se poi se ne cambia la data.
+ */
+export function paymentMonth(t: Transaction): string {
+  const prefix = `autopay-${t.recurringId}-`;
+  return t.recurringId && t.id.startsWith(prefix) ? t.id.slice(prefix.length) : monthOf(t.date);
+}
+
 /** Il movimento che registra la voce mensile in quel mese, se esiste. */
 export const recurringPayment = (txs: Transaction[], r: Recurring, month: string) =>
-  txs.find((t) => t.recurringId === r.id && monthOf(t.date) === month);
+  txs.find((t) => t.recurringId === r.id && paymentMonth(t) === month);
 
 export interface MonthSummary {
   /** Entrate e uscite già avvenute (data fino a oggi). */
@@ -546,7 +555,9 @@ export const sortPlanned = (list: Planned[]) =>
 export function parseAmount(input: string): number {
   const s = input.trim().replace(/\s|€/g, '');
   if (!s) return NaN;
-  const normalized = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s;
+  // senza virgola, "1.500" o "1.234.567" sono migliaia (gli importi hanno al massimo due decimali)
+  const thousands = /^-?[1-9]\d{0,2}(\.\d{3})+$/.test(s);
+  const normalized = s.includes(',') || thousands ? s.replace(/\./g, '').replace(',', '.') : s;
   return /^-?\d*\.?\d+$/.test(normalized) ? round(Number(normalized)) : NaN;
 }
 
